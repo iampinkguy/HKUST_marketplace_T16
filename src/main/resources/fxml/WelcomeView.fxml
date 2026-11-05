@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.image.Image?>
+<?import javafx.scene.image.ImageView?>
+<?import javafx.scene.layout.*?>
+
+<BorderPane xmlns:fx="http://javafx.com/fxml"
+            fx:controller="com.hkust.marketplace.controllers.WelcomeController"
+            styleClass="welcome-bg"
+            prefWidth="1200" prefHeight="780">
+
+    <center>
+        <VBox alignment="CENTER" spacing="30">
+            <padding>
+                <Insets top="40" right="40" bottom="40" left="40"/>
+            </padding>
+
+            <HBox alignment="CENTER" spacing="18">
+                <ImageView fitHeight="90" fitWidth="60" preserveRatio="true">
+                    <image>
+                        <Image url="@../images/hkust_logo.png"/>
+                    </image>
+                </ImageView>
+                <VBox spacing="4">
+                    <Label text="HKUST Marketplace" style="-fx-text-fill: white; -fx-font-size: 36px; -fx-font-weight: bold;"/>
+                    <Label text="Campus Buy · Borrow · Giveaway Platform"
+                           style="-fx-text-fill: #c9a55c; -fx-font-size: 16px;"/>
+                </VBox>
+            </HBox>
+
+            <Label text="Choose your portal to continue"
+                   style="-fx-text-fill: #a0b8d0; -fx-font-size: 15px;"/>
+
+            <HBox alignment="CENTER" spacing="28">
+                <!-- Buyer -->
+                <VBox alignment="CENTER" spacing="14" styleClass="role-card" prefWidth="220">
+                    <Label text="🛒" style="-fx-font-size: 42px;"/>
+                    <Label text="Buyer" style="-fx-font-size: 22px; -fx-font-weight: bold; -fx-text-fill: #003974;"/>
+                    <Label text="Browse listings,&#10;make offers &amp; claims"
+                           style="-fx-text-fill: #5a5a7a; -fx-text-alignment: center;"
+                           textAlignment="CENTER"/>
+                    <Button text="Enter as Buyer" styleClass="btn-primary"
+                            onAction="#goBuyer" prefWidth="160" prefHeight="36"/>
+                </VBox>
+
+                <!-- Seller -->
+                <VBox alignment="CENTER" spacing="14" styleClass="role-card" prefWidth="220">
+                    <Label text="🏪" style="-fx-font-size: 42px;"/>
+                    <Label text="Seller" style="-fx-font-size: 22px; -fx-font-weight: bold; -fx-text-fill: #A68137;"/>
+                    <Label text="Post items,&#10;manage deals &amp; stats"
+                           style="-fx-text-fill: #5a5a7a; -fx-text-alignment: center;"
+                           textAlignment="CENTER"/>
+                    <Button text="Enter as Seller" styleClass="btn-gold"
+                            onAction="#goSeller" prefWidth="160" prefHeight="36"/>
+                </VBox>
+
+                <!-- Admin -->
+                <VBox alignment="CENTER" spacing="14" styleClass="role-card" prefWidth="220">
+                    <Label text="🛡️" style="-fx-font-size: 42px;"/>
+                    <Label text="Admin" style="-fx-font-size: 22px; -fx-font-weight: bold; -fx-text-fill: #2e7d32;"/>
+                    <Label text="Review listings,&#10;moderate &amp; oversee"
+                           style="-fx-text-fill: #5a5a7a; -fx-text-alignment: center;"
+                           textAlignment="CENTER"/>
+                    <Button text="Enter as Admin" styleClass="btn-success"
+                            onAction="#goAdmin" prefWidth="160" prefHeight="36"/>
+                </VBox>
+            </HBox>
+
+            <Label text="Frontend Demo · Skeleton for COMP Project  ·  No backend connected"
+                   style="-fx-text-fill: #6a849e; -fx-font-size: 12px;"/>
+        </VBox>
+    </center>
+</BorderPane>

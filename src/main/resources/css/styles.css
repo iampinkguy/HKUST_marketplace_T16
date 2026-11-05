@@ -1,0 +1,273 @@
+/* ============================================================
+   HKUST Marketplace – Global Stylesheet
+   Colors inspired by HKUST branding: Deep Blue (#003974) + Gold (#A68137)
+   ============================================================ */
+
+.root {
+    -fx-font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    -fx-font-size: 14px;
+    -fx-background-color: #f5f7fa;
+}
+
+/* ---------- Colour palette ---------- */
+* {
+    -hkust-blue: #003974;
+    -hkust-blue-dark: #00254d;
+    -hkust-gold: #A68137;
+    -hkust-gold-light: #c9a55c;
+    -hkust-light: #e8f0f8;
+    -card-bg: #ffffff;
+    -text-primary: #1a1a2e;
+    -text-secondary: #5a5a7a;
+    -success: #2e7d32;
+    -warning: #ed6c02;
+    -danger: #c62828;
+    -border: #d0d7e2;
+}
+
+/* ---------- Buttons ---------- */
+.button {
+    -fx-background-radius: 8;
+    -fx-border-radius: 8;
+    -fx-cursor: hand;
+    -fx-padding: 10 20 10 20;
+    -fx-font-weight: 600;
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.08), 4, 0, 0, 1);
+}
+
+.btn-primary {
+    -fx-background-color: #003974;
+    -fx-text-fill: white;
+}
+.btn-primary:hover {
+    -fx-background-color: #00254d;
+}
+
+.btn-gold {
+    -fx-background-color: #A68137;
+    -fx-text-fill: white;
+}
+.btn-gold:hover {
+    -fx-background-color: #8a6b2c;
+}
+
+.btn-outline {
+    -fx-background-color: transparent;
+    -fx-border-color: #003974;
+    -fx-border-width: 1.5;
+    -fx-text-fill: #003974;
+}
+.btn-outline:hover {
+    -fx-background-color: #e8f0f8;
+}
+
+.btn-danger {
+    -fx-background-color: #c62828;
+    -fx-text-fill: white;
+}
+.btn-danger:hover {
+    -fx-background-color: #a01f1f;
+}
+
+.btn-success {
+    -fx-background-color: #2e7d32;
+    -fx-text-fill: white;
+}
+.btn-success:hover {
+    -fx-background-color: #1b5e20;
+}
+
+.btn-sm {
+    -fx-padding: 6 12 6 12;
+    -fx-font-size: 12px;
+}
+
+/* ---------- Text Fields ---------- */
+.text-field, .password-field, .text-area, .combo-box {
+    -fx-background-radius: 8;
+    -fx-border-radius: 8;
+    -fx-border-color: #d0d7e2;
+    -fx-border-width: 1.5;
+    -fx-background-color: white;
+    -fx-padding: 10 14;
+    -fx-prompt-text-fill: #9aa0b0;
+}
+.text-field:focused, .password-field:focused, .text-area:focused, .combo-box:focused {
+    -fx-border-color: #003974;
+    -fx-effect: dropshadow(gaussian, rgba(0,57,116,0.25), 6, 0, 0, 0);
+}
+
+/* ---------- Cards ---------- */
+.card {
+    -fx-background-color: white;
+    -fx-background-radius: 12;
+    -fx-border-radius: 12;
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.08), 10, 0, 0, 3);
+    -fx-padding: 20;
+}
+
+.card-hover:hover {
+    -fx-effect: dropshadow(gaussian, rgba(0,57,116,0.18), 14, 0, 0, 4);
+    -fx-cursor: hand;
+}
+
+/* ---------- Sidebar ---------- */
+.sidebar {
+    -fx-background-color: #003974;
+    -fx-min-width: 240;
+    -fx-pref-width: 240;
+}
+
+.sidebar-btn {
+    -fx-background-color: transparent;
+    -fx-text-fill: #c5d4e8;
+    -fx-alignment: CENTER_LEFT;
+    -fx-padding: 14 20;
+    -fx-font-size: 14px;
+    -fx-background-radius: 0;
+    -fx-border-radius: 0;
+    -fx-effect: null;
+}
+.sidebar-btn:hover {
+    -fx-background-color: rgba(255,255,255,0.1);
+    -fx-text-fill: white;
+}
+.sidebar-btn-active {
+    -fx-background-color: rgba(166,129,55,0.35);
+    -fx-text-fill: white;
+    -fx-border-color: #A68137;
+    -fx-border-width: 0 0 0 4;
+}
+
+/* ---------- Top bar ---------- */
+.top-bar {
+    -fx-background-color: white;
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.06), 6, 0, 0, 2);
+    -fx-padding: 12 24;
+}
+
+/* ---------- Labels ---------- */
+.title-label {
+    -fx-font-size: 26px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #003974;
+}
+.subtitle-label {
+    -fx-font-size: 15px;
+    -fx-text-fill: #5a5a7a;
+}
+.section-title {
+    -fx-font-size: 18px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #1a1a2e;
+}
+
+/* ---------- Status badges ---------- */
+.badge {
+    -fx-background-radius: 12;
+    -fx-padding: 4 10;
+    -fx-font-size: 11px;
+    -fx-font-weight: bold;
+}
+.badge-live {
+    -fx-background-color: #e8f5e9;
+    -fx-text-fill: #2e7d32;
+}
+.badge-pending {
+    -fx-background-color: #fff3e0;
+    -fx-text-fill: #ed6c02;
+}
+.badge-sold {
+    -fx-background-color: #e3f2fd;
+    -fx-text-fill: #1565c0;
+}
+.badge-rejected {
+    -fx-background-color: #ffebee;
+    -fx-text-fill: #c62828;
+}
+
+/* ---------- Table ---------- */
+.table-view {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+}
+.table-view .column-header-background {
+    -fx-background-color: #e8f0f8;
+}
+.table-view .column-header {
+    -fx-background-color: transparent;
+    -fx-text-fill: #003974;
+    -fx-font-weight: bold;
+}
+.table-row-cell:selected {
+    -fx-background-color: #e8f0f8;
+}
+
+/* ---------- Welcome / Auth screens ---------- */
+.auth-pane {
+    -fx-background-color: white;
+    -fx-background-radius: 16;
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.12), 20, 0, 0, 6);
+    -fx-padding: 40;
+}
+
+.welcome-bg {
+    -fx-background-color: linear-gradient(to bottom right, #003974, #001f3f);
+}
+
+.role-card {
+    -fx-background-color: white;
+    -fx-background-radius: 16;
+    -fx-padding: 30 40;
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.15), 16, 0, 0, 4);
+    -fx-cursor: hand;
+}
+.role-card:hover {
+    -fx-effect: dropshadow(gaussian, rgba(166,129,55,0.4), 20, 0, 0, 6);
+    -fx-scale-x: 1.03;
+    -fx-scale-y: 1.03;
+}
+
+/* ---------- ScrollPane ---------- */
+.scroll-pane {
+    -fx-background-color: transparent;
+}
+.scroll-pane > .viewport {
+    -fx-background-color: transparent;
+}
+
+/* ---------- Listing card ---------- */
+.listing-card {
+    -fx-background-color: white;
+    -fx-background-radius: 12;
+    -fx-padding: 16;
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.07), 8, 0, 0, 2);
+}
+.listing-card:hover {
+    -fx-effect: dropshadow(gaussian, rgba(0,57,116,0.2), 12, 0, 0, 3);
+}
+
+/* ---------- Notification item ---------- */
+.notif-item {
+    -fx-background-color: white;
+    -fx-background-radius: 10;
+    -fx-padding: 14 18;
+    -fx-border-color: #e8f0f8;
+    -fx-border-width: 0 0 0 4;
+    -fx-border-color: #A68137;
+}
+
+/* ---------- Misc ---------- */
+.separator *.line {
+    -fx-border-style: solid;
+    -fx-border-width: 0 0 1 0;
+    -fx-border-color: #d0d7e2;
+}
+
+.hyperlink {
+    -fx-text-fill: #003974;
+    -fx-border-color: transparent;
+}
+.hyperlink:hover {
+    -fx-text-fill: #A68137;
+}
