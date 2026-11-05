@@ -1,9 +1,14 @@
 package com.hkust.marketplace.utils;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.sql.*;
 
 public class DatabaseManager {
 
     private static final String URL = "jdbc:sqlite:data.db";
+    private static final Path UPLOADS_DIR = Path.of("uploads").toAbsolutePath().normalize();
+    private static final String PHOTO_EXTENSION = ".jpg"; // Assuming all photos are JPEGs; adjust as needed
     private static final DatabaseManager INSTANCE = new DatabaseManager();
 
     public static Connection connect() throws SQLException {
@@ -282,5 +287,53 @@ public class DatabaseManager {
         }
     }
 
+    public static void UploadPhoto(Path sourcePhoto, String listingId, int photoIndex) {
+        String photoName = listingId + "_" + photoIndex + PHOTO_EXTENSION; // Example naming convention
+        if (sourcePhoto == null || photoName == null || photoName.isBlank()) {
+            throw new IllegalArgumentException("Photo and photo name are required.");
+        }
+
+        Path destination = UPLOADS_DIR.resolve(photoName)
+                .normalize();
+
+        if (!destination.getParent().equals(UPLOADS_DIR)) {
+            throw new IllegalArgumentException("Invalid photo name.");
+        }
+
+        try {
+            if (!Files.isRegularFile(sourcePhoto)) {
+                throw new IllegalArgumentException("Source photo does not exist.");
+            }
+
+            Files.createDirectories(UPLOADS_DIR);
+            Files.copy(sourcePhoto, destination);
+        } catch (IOException e) {
+            throw new IllegalStateException("Could not upload photo.", e);
+        }
+    }
+
+    public static byte[] FetchPhoto(String listingId, int photoIndex) {
+        String photoName = listingId + "_" + photoIndex + PHOTO_EXTENSION; // Example naming convention
+        if (photoName.isBlank()) {
+            throw new IllegalArgumentException("Photo name is required.");
+        }
+
+        Path photo = UPLOADS_DIR.resolve(photoName)
+                .normalize();
+
+        if (!photo.getParent().equals(UPLOADS_DIR)) {
+            throw new IllegalArgumentException("Invalid photo name.");
+        }
+
+        try {
+            if (!Files.isRegularFile(photo)) {
+                throw new IllegalArgumentException("Photo does not exist.");
+            }
+
+            return Files.readAllBytes(photo);
+        } catch (IOException e) {
+            throw new IllegalStateException("Could not fetch photo.", e);
+        }
+    }
 
 }
