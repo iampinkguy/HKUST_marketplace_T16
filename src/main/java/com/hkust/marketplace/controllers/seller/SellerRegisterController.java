@@ -45,6 +45,8 @@ public class SellerRegisterController {
         if (meetupCombo.getValue() != null) user.setPreferredMeetup(meetupCombo.getValue());
         if (bioArea.getText() != null && !bioArea.getText().isBlank()) user.setBio(bioArea.getText().trim());
         DummyDataService.getInstance().registerUser(user);
+        // DatabaseManager.getInstance().createUser();
+        // DatabaseManager.getInstance().createData();
 
         showSuccess("Seller account created! You can now login.");
         usernameField.clear(); fullNameField.clear(); passwordField.clear();
