@@ -289,7 +289,7 @@ public class DatabaseManager {
 
     public static void UploadPhoto(Path sourcePhoto, String listingId, int photoIndex) {
         String photoName = listingId + "_" + photoIndex + PHOTO_EXTENSION; // Example naming convention
-        if (sourcePhoto == null || photoName == null || photoName.isBlank()) {
+        if (sourcePhoto == null || photoName.isBlank()) {
             throw new IllegalArgumentException("Photo and photo name are required.");
         }
 
