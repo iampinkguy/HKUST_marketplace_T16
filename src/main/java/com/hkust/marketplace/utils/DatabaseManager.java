@@ -9,7 +9,6 @@ public class DatabaseManager {
     private static final String URL = "jdbc:sqlite:data.db";
     private static final Path UPLOADS_DIR = Path.of("uploads").toAbsolutePath().normalize();
     private static final String PHOTO_EXTENSION = ".jpg"; // Assuming all photos are JPEGs; adjust as needed
-    private static final DatabaseManager INSTANCE = new DatabaseManager();
 
     public static Connection connect() throws SQLException {
         return DriverManager.getConnection(URL);
@@ -150,12 +149,12 @@ public class DatabaseManager {
                                     String meetupLocation, String postedDate, String availabilityStatus) {
 
         String sql = """
-        INSERT INTO listings (
-            item_name, category, item_condition, description, numPhotos, 
-            photo1, photo2, photo3, photo4, photo5, photo6, 
-            meetup_location, posted_date, availability_status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """;
+            INSERT INTO listings (
+                item_name, category, item_condition, description, numPhotos, 
+                photo1, photo2, photo3, photo4, photo5, photo6, 
+                meetup_location, posted_date, availability_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """;
 
         try (Connection connection = connect();
              PreparedStatement stmt = connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
@@ -301,9 +300,9 @@ public class DatabaseManager {
         }
     }
 
-    public static void UploadPhoto(Path sourcePhoto, String listingId, int photoIndex) {
+    public static void uploadPhoto(Path sourcePhoto, String listingId, int photoIndex) {
         String photoName = listingId + "_" + photoIndex + PHOTO_EXTENSION; // Example naming convention
-        if (sourcePhoto == null || photoName == null || photoName.isBlank()) {
+        if (sourcePhoto == null || photoName.isBlank()) {
             throw new IllegalArgumentException("Photo and photo name are required.");
         }
 
@@ -326,7 +325,7 @@ public class DatabaseManager {
         }
     }
 
-    public static byte[] FetchPhoto(String listingId, int photoIndex) {
+    public static byte[] fetchPhoto(String listingId, int photoIndex) {
         String photoName = listingId + "_" + photoIndex + PHOTO_EXTENSION; // Example naming convention
         if (photoName.isBlank()) {
             throw new IllegalArgumentException("Photo name is required.");
