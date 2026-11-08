@@ -69,7 +69,7 @@ public class DatabaseManager {
                 posted_date DATE NOT NULL,
                 availability_status TEXT NOT NULL,
                 views INTEGER NOT NULL DEFAULT 0,
-                approved INTEGER NOT NULL DEFAULT -1,
+                approved INTEGER NOT NULL DEFAULT -1
             )
             """);
 
@@ -77,9 +77,9 @@ public class DatabaseManager {
                 CREATE TABLE IF NOT EXISTS offers (
                 buyer_username STRING NOT NULL,
                 listing_id INTEGER NOT NULL,
-                PRIMARY KEY(buyer_username, listing_id),
                 price REAL NOT NULL,
-                chatbox_id STRING NOT NULL
+                chatbox_id STRING NOT NULL,
+                PRIMARY KEY(buyer_username, listing_id)
             )
             """);
 
@@ -87,9 +87,9 @@ public class DatabaseManager {
                 CREATE TABLE IF NOT EXISTS reviews (
                 buyer_username STRING NOT NULL,
                 listing_id INTEGER NOT NULL,
-                PRIMARY KEY(buyer_username, listing_id),
                 rating REAL NOT NULL,
-                text STRING
+                text STRING,
+                PRIMARY KEY(buyer_username, listing_id)
             )
             """);
 
@@ -97,10 +97,24 @@ public class DatabaseManager {
                 CREATE TABLE IF NOT EXISTS feedbacks (
                 admin_username STRING NOT NULL,
                 listing_id STRING NOT NULL,
-                PRIMARY KEY(admin_username, listing_id),
-                reason STRING NOT NULL
+                reason STRING NOT NULL,
+                PRIMARY KEY(admin_username, listing_id)
             )
             """);
+    }
+
+    public static boolean usernameExists(String username) {
+        String sql = "SELECT 1 FROM users WHERE username = ? COLLATE NOCASE LIMIT 1";
+
+        try (Connection connection = connect();
+             PreparedStatement stmt = connection.prepareStatement(sql)) {
+            stmt.setString(1, username);
+            try (ResultSet result = stmt.executeQuery()) {
+                return result.next();
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not check username", e);
+        }
     }
 
 
