@@ -1,7 +1,7 @@
 package com.hkust.marketplace.controllers.seller;
 
-import com.hkust.marketplace.models.User;
-import com.hkust.marketplace.models.UserRole;
+import com.hkust.marketplace.utils.DatabaseManager;
+import com.hkust.marketplace.utils.DataService;
 import com.hkust.marketplace.utils.DummyDataService;
 import com.hkust.marketplace.utils.SceneManager;
 import javafx.collections.FXCollections;
@@ -21,6 +21,7 @@ public class SellerRegisterController {
 
     @FXML
     public void initialize() {
+        DatabaseManager.initialize();
         meetupCombo.setItems(FXCollections.observableArrayList(DummyDataService.HKUST_LOCATIONS));
     }
 
@@ -33,7 +34,7 @@ public class SellerRegisterController {
         String confirm = confirmPasswordField.getText();
 
         if (username.isEmpty()) { showError("Username is required."); return; }
-        if (DummyDataService.getInstance().usernameExists(username)) {
+        if (DatabaseManager.usernameExists(username)) {
             showError("Username already taken."); return;
         }
         if (fullName.isEmpty()) { showError("Full Name cannot be empty."); return; }
@@ -41,12 +42,23 @@ public class SellerRegisterController {
         if (!"OK".equals(pwdCheck)) { showError(pwdCheck); return; }
         if (!password.equals(confirm)) { showError("Passwords do not match."); return; }
 
-        User user = new User(username.toLowerCase(), fullName, password, UserRole.SELLER);
-        if (meetupCombo.getValue() != null) user.setPreferredMeetup(meetupCombo.getValue());
-        if (bioArea.getText() != null && !bioArea.getText().isBlank()) user.setBio(bioArea.getText().trim());
-        DummyDataService.getInstance().registerUser(user);
-        // DatabaseManager.getInstance().createUser();
-        // DatabaseManager.getInstance().createData();
+        String normalizedUsername = username.toLowerCase();
+        String bio = bioArea.getText() == null || bioArea.getText().isBlank()
+                ? null : bioArea.getText().trim();
+        try {
+            DatabaseManager.createUser(
+                    normalizedUsername,
+                    fullName,
+                    DataService.hashPassword(password),
+                    "SELLER",
+                    null,
+                    bio,
+                    meetupCombo.getValue()
+            );
+        } catch (IllegalStateException e) {
+            showError("Could not save your account: " + e.getMessage());
+            return;
+        }
 
         showSuccess("Seller account created! You can now login.");
         usernameField.clear(); fullNameField.clear(); passwordField.clear();
