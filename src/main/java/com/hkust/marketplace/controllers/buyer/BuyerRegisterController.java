@@ -2,6 +2,7 @@ package com.hkust.marketplace.controllers.buyer;
 
 import com.hkust.marketplace.models.User;
 import com.hkust.marketplace.models.UserRole;
+import com.hkust.marketplace.utils.DatabaseManager;
 import com.hkust.marketplace.utils.DummyDataService;
 import com.hkust.marketplace.utils.SceneManager;
 import javafx.collections.FXCollections;
@@ -21,9 +22,7 @@ public class BuyerRegisterController {
     @FXML
     public void initialize() {
         residenceCombo.setItems(FXCollections.observableArrayList(
-                "Hall 1", "Hall 2", "Hall 3", "Hall 4", "Hall 5",
-                "Hall 6", "Hall 7", "Hall 8", "Hall 9",
-                "UG Hall 1", "UG Hall 2", "Off-campus"
+            com.hkust.marketplace.utils.DataService.RESIDENCES
         ));
     }
 
@@ -42,7 +41,7 @@ public class BuyerRegisterController {
             showError("Username is required.");
             return;
         }
-        if (DummyDataService.getInstance().usernameExists(username)) {
+        if (DatabaseManager.usernameExists(username)) {
             showError("Username already taken. Please choose another.");
             return;
         }
