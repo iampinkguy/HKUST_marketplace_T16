@@ -3,6 +3,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.*;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 public class DatabaseManager {
 
@@ -346,6 +350,79 @@ public class DatabaseManager {
             return Files.readAllBytes(photo);
         } catch (IOException e) {
             throw new IllegalStateException("Could not fetch photo.", e);
+        }
+    }
+
+    private static Map<String, Object> resultSetToMap(ResultSet rs) throws SQLException {
+        Map<String, Object> row = new LinkedHashMap<>();
+        ResultSetMetaData metadata = rs.getMetaData();
+
+        for (int i = 1; i <= metadata.getColumnCount(); i++) 
+            row.put(metadata.getColumnName(i), rs.getObject(i));
+
+        return row;
+    }
+
+    public static Map<String, Object> fetchRow(String tableName, String keyColumn, Object keyValue) {
+        String sql = "SELECT * FROM " + tableName
+                + " WHERE " + keyColumn + " = ?";
+
+        try (Connection connection = connect();
+            PreparedStatement stmt = connection.prepareStatement(sql)) {
+
+            stmt.setObject(1, keyValue);
+
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (!rs.next())
+                    return null;
+
+                return resultSetToMap(rs);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException(
+                    "Could not fetch row from " + tableName, e);
+        }
+    }
+
+    public static List<Map<String, Object>> fetchRows(String tableName, Map<String, Object> filters) {
+
+        StringBuilder sql = new StringBuilder("SELECT * FROM " + tableName);
+
+        List<Object> parameters = new ArrayList<>();
+
+        if (!filters.isEmpty()) {
+            sql.append(" WHERE ");
+
+            List<String> conditions = new ArrayList<>();
+
+            for (Map.Entry<String, Object> filter : filters.entrySet()) {
+                if (filter.getValue() == null) {
+                    conditions.add(filter.getKey() + " IS NULL");
+                } else {
+                    conditions.add(filter.getKey() + " = ?");
+                    parameters.add(filter.getValue());
+                }
+            }
+
+            sql.append(String.join(" AND ", conditions));
+        }
+
+        List<Map<String, Object>> rows = new ArrayList<>();
+
+        try (Connection connection = connect();
+            PreparedStatement stmt = connection.prepareStatement(sql.toString())) {
+
+            for (int i = 0; i < parameters.size(); i++)
+                stmt.setObject(i + 1, parameters.get(i));
+
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next())
+                    rows.add(resultSetToMap(rs));
+            }
+
+            return rows;
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not filter rows from " + tableName, e);
         }
     }
 

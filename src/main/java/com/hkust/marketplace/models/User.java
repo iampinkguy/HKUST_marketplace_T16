@@ -27,7 +27,7 @@ public class User {
         this();
         this.username = username;
         this.fullName = fullName;
-        this.passwordHash = password; // Demo only – in production hash it!
+        this.passwordHash = password;
         this.role = role;
     }
 
