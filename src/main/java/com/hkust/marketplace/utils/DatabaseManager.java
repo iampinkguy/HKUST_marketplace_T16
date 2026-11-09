@@ -3,6 +3,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.*;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -15,7 +16,7 @@ public class DatabaseManager {
     private static final String PHOTO_EXTENSION = ".jpg"; // Assuming all photos are JPEGs; adjust as needed
 
     public static Connection connect() throws SQLException {
-        return DriverManager.getConnection(URL);
+        return DriverManager.getConnection(System.getProperty("marketplace.database.url", URL));
     }
 
     private static void runSql(String sql) {
@@ -104,6 +105,32 @@ public class DatabaseManager {
                 PRIMARY KEY(admin_username, listing_id)
             )
             """);
+    }
+
+    /** Inserts a user only when its username is not already in use, ignoring case. */
+    public static void createUserIfMissing(String username, String fullName, String passwordHash,
+                                         String role, String residenceHall, String bio, String preferredMeetup) {
+        String sql = """
+            INSERT INTO users (username, full_name, password_hash, role, residence_hall, bio, preferred_meetup, created_at)
+            SELECT ?, ?, ?, ?, ?, ?, ?, ?
+            WHERE NOT EXISTS (SELECT 1 FROM users WHERE username = ? COLLATE NOCASE)
+            """;
+
+        try (Connection connection = connect();
+             PreparedStatement stmt = connection.prepareStatement(sql)) {
+            stmt.setString(1, username);
+            stmt.setString(2, fullName);
+            stmt.setString(3, passwordHash);
+            stmt.setString(4, role);
+            stmt.setString(5, residenceHall);
+            stmt.setString(6, bio);
+            stmt.setString(7, preferredMeetup);
+            stmt.setString(8, LocalDateTime.now().toString());
+            stmt.setString(9, username);
+            stmt.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not create missing user", e);
+        }
     }
 
     public static boolean usernameExists(String username) {
@@ -366,6 +393,11 @@ public class DatabaseManager {
     public static Map<String, Object> fetchRow(String tableName, String keyColumn, Object keyValue) {
         String sql = "SELECT * FROM " + tableName
                 + " WHERE " + keyColumn + " = ?";
+
+        // Keep account lookup consistent with usernameExists and account seeding.
+        if ("users".equals(tableName) && "username".equals(keyColumn)) {
+            sql += " COLLATE NOCASE";
+        }
 
         try (Connection connection = connect();
             PreparedStatement stmt = connection.prepareStatement(sql)) {
