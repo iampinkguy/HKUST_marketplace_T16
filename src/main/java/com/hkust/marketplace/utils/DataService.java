@@ -2,8 +2,16 @@ package com.hkust.marketplace.utils;
 
 import com.hkust.marketplace.models.User;
 import com.hkust.marketplace.models.UserRole;
+import com.hkust.marketplace.models.Listing;
+import com.hkust.marketplace.models.ListingStatus;
+import com.hkust.marketplace.models.ListingType;
+import com.hkust.marketplace.models.Notification;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
@@ -115,6 +123,161 @@ public class DataService {
                         user.bio(), user.preferredMeetup());
             }
         }
+    }
+
+    /** Loads SQLite pending listings; no dummy listings are imported or seeded. */
+    public static List<Listing> getPendingListings() {
+        requireAdmin();
+        List<Listing> listings = new ArrayList<>();
+        for (Map<String, Object> row : DatabaseManager.fetchRows("listings", Map.of("approved", -1))) {
+            listings.add(toListing(row));
+        }
+        listings.sort(Comparator.comparing(Listing::getSubmittedAt).thenComparing(Listing::getId));
+        return listings;
+    }
+
+    /** Checks the queue snapshot again when opening a submission. */
+    public static Listing getListingForReview(String listingId, long expectedVersion) {
+        Listing listing = getListingForAdmin(listingId);
+        if (listing == null || listing.getStatus() != ListingStatus.PENDING_REVIEW
+                || listing.getReviewVersion() != expectedVersion) {
+            throw new IllegalStateException("Listing is unavailable or has changed since it was displayed. Please review it again.");
+        }
+        return listing;
+    }
+
+    /** Also used to show the current state after an unavailable/stale submission. */
+    public static Listing getListingForAdmin(String listingId) {
+        requireAdmin();
+        Map<String, Object> row = DatabaseManager.fetchRow("listings", "listing_id", parseListingId(listingId));
+        return row == null ? null : toListing(row);
+    }
+
+    /** The expected version must come from the submission actually displayed to the admin. */
+    public static void approveListing(String listingId, long expectedVersion) {
+        String adminUsername = requireAdmin();
+        DatabaseManager.reviewListing(parseListingId(listingId), adminUsername, true, null, expectedVersion);
+    }
+
+    public static void rejectListing(String listingId, String reason, long expectedVersion) {
+        String adminUsername = requireAdmin();
+        if (reason == null || reason.isBlank()) {
+            throw new IllegalArgumentException("A rejection reason is required.");
+        }
+        DatabaseManager.reviewListing(parseListingId(listingId), adminUsername, false, reason.trim(), expectedVersion);
+    }
+
+    /** Shared read for the buyer team's database integration; approval publishes into this result. */
+    public static List<Listing> getLiveListings() {
+        List<Listing> listings = new ArrayList<>();
+        for (Map<String, Object> row : DatabaseManager.fetchRows("listings", Map.of("approved", 1))) {
+            listings.add(toListing(row));
+        }
+        listings.sort(Comparator.comparing(Listing::getPostedAt,
+                Comparator.nullsLast(Comparator.reverseOrder())).thenComparing(Listing::getId));
+        return listings;
+    }
+
+    /** Shared read for the seller team's notification integration. */
+    public static List<Notification> getNotificationsFor(String username) {
+        User user = SessionManager.getCurrentUser();
+        if (user == null || username == null || (!SessionManager.isAdmin()
+                && !username.equalsIgnoreCase(user.getUsername()))) {
+            throw new SecurityException("You cannot access another user's notifications.");
+        }
+        Map<String, Object> account = DatabaseManager.fetchRow("users", "username", user.getUsername());
+        if (!user.isActive() || account == null || ((Number) account.get("active")).intValue() != 1
+                || !user.getRole().name().equals(account.get("role"))) {
+            throw new SecurityException("An active authenticated account is required.");
+        }
+        Map<String, Object> recipient = DatabaseManager.fetchRow("users", "username", username);
+        if (recipient == null) return List.of();
+        List<Notification> notifications = new ArrayList<>();
+        for (Map<String, Object> row : DatabaseManager.fetchRows("notifications", Map.of("username", recipient.get("username")))) {
+            Notification notification = new Notification((String) row.get("username"), (String) row.get("title"),
+                    (String) row.get("message"), (String) row.get("category"));
+            notification.setId(row.get("notification_id").toString());
+            notification.setTimestamp(parseDate((String) row.get("timestamp")));
+            notification.setRead(((Number) row.get("is_read")).intValue() != 0);
+            notifications.add(notification);
+        }
+        notifications.sort(Comparator.comparing(Notification::getTimestamp).reversed());
+        return notifications;
+    }
+
+    private static String requireAdmin() {
+        User currentUser = SessionManager.getCurrentUser();
+        if (currentUser == null || currentUser.getRole() != UserRole.ADMIN || !currentUser.isActive()) {
+            throw new SecurityException("An active admin account is required.");
+        }
+        Map<String, Object> account = DatabaseManager.fetchRow("users", "username", currentUser.getUsername());
+        if (account == null || !"ADMIN".equals(account.get("role"))
+                || ((Number) account.get("active")).intValue() != 1) {
+            throw new SecurityException("An active admin account is required.");
+        }
+        return (String) account.get("username");
+    }
+
+    private static int parseListingId(String listingId) {
+        try {
+            int id = Integer.parseInt(listingId);
+            if (id > 0) return id;
+        } catch (NumberFormatException ignored) {
+            // Listing IDs in SQLite are positive integers, unlike the dummy IDs.
+        }
+        throw new IllegalArgumentException("A valid listing ID is required.");
+    }
+
+    /** Maps database fields to the existing model, including separate submission/publication dates. */
+    private static Listing toListing(Map<String, Object> row) {
+        Listing listing = new Listing();
+        listing.setId(row.get("listing_id").toString());
+        listing.setTitle((String) row.get("item_name"));
+        listing.setDescription((String) row.get("description"));
+        listing.setCategory((String) row.get("category"));
+        listing.setCondition((String) row.get("item_condition"));
+        listing.setMeetupLocation((String) row.get("meetup_location"));
+        listing.setStatus(switch (((Number) row.get("approved")).intValue()) {
+            case -1 -> ListingStatus.PENDING_REVIEW;
+            case 0 -> ListingStatus.REJECTED;
+            case 1 -> ListingStatus.LIVE;
+            default -> throw new IllegalStateException("Unknown listing review status.");
+        });
+        String type = (String) row.get("listing_type");
+        listing.setType(type == null ? null : ListingType.valueOf(type));
+        Number price = (Number) row.get("price");
+        listing.setPrice(price == null ? null : price.doubleValue());
+        Number days = (Number) row.get("lending_days");
+        listing.setLendingDays(days == null ? null : days.intValue());
+        listing.setAvailabilityStatus((String) row.get("availability_status"));
+        listing.setReviewVersion(((Number) row.get("review_version")).longValue());
+        listing.setViewCount(((Number) row.get("views")).intValue());
+        listing.setSellerUsername((String) row.get("seller_username"));
+        if (listing.getSellerUsername() != null) {
+            Map<String, Object> seller = DatabaseManager.fetchRow("users", "username", listing.getSellerUsername());
+            listing.setSellerFullName(seller == null ? listing.getSellerUsername() : (String) seller.get("full_name"));
+        }
+        try {
+            listing.setPostedAt(parseDate((String) row.get("posted_date")));
+            listing.setSubmittedAt(parseDate((String) row.get("submitted_at")));
+            listing.setReviewedAt(parseDate((String) row.get("reviewed_at")));
+            listing.setRejectionReason((String) row.get("rejection_reason"));
+        } catch (DateTimeParseException e) {
+            throw new IllegalStateException("Listing " + listing.getId() + " has an invalid date.", e);
+        }
+        List<String> photos = new ArrayList<>();
+        for (int i = 1; i <= Math.min(6, ((Number) row.get("numPhotos")).intValue()); i++) {
+            String photo = (String) row.get("photo" + i);
+            if (photo != null && !photo.isBlank()) photos.add(photo);
+        }
+        listing.setPhotoPaths(photos);
+        return listing;
+    }
+
+    private static LocalDateTime parseDate(String value) {
+        if (value == null || value.isBlank()) return null;
+        return value.length() == 10 ? LocalDate.parse(value).atStartOfDay()
+                : LocalDateTime.parse(value.replace(' ', 'T'));
     }
 
     public static String hashPassword(String password) {
