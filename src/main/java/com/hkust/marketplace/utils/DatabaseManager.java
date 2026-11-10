@@ -8,6 +8,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import com.hkust.marketplace.models.UserRole;
+
 public class DatabaseManager {
 
     private static final String URL = "jdbc:sqlite:data.db";
@@ -36,7 +38,7 @@ public class DatabaseManager {
                 residence_hall TEXT,
                 bio TEXT,
                 preferred_meetup TEXT,
-                active INTEGER NOT NULL DEFAULT 1,
+                active INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 average_rating REAL NOT NULL DEFAULT 0,
                 rating_count INTEGER NOT NULL DEFAULT 0
@@ -120,9 +122,18 @@ public class DatabaseManager {
         }
     }
 
-
     public static void createUser(String username, String fullName, String passwordHash,
                                   String role, String residenceHall, String bio, String preferredMeetup) {
+
+        switch (role) {
+            case "BUYER", "SELLER", "ADMIN" -> createUser(username, fullName, passwordHash, UserRole.valueOf(role), residenceHall, bio, preferredMeetup);
+            default -> throw new IllegalArgumentException("Invalid role: " + role);
+        }
+    }
+
+
+    public static void createUser(String username, String fullName, String passwordHash,
+                                  UserRole role, String residenceHall, String bio, String preferredMeetup) {
         String sql = """
             INSERT INTO users (username, full_name, password_hash, role, residence_hall, bio, preferred_meetup, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -134,7 +145,7 @@ public class DatabaseManager {
             stmt.setString(1, username);
             stmt.setString(2, fullName);
             stmt.setString(3, passwordHash);
-            stmt.setString(4, role);
+            stmt.setString(4, role.name());
             stmt.setString(5, residenceHall);     // Can be null
             stmt.setString(6, bio);               // Can be null
             stmt.setString(7, preferredMeetup);   // Can be null
