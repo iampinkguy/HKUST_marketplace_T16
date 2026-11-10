@@ -30,7 +30,7 @@ public class BuyerLoginController {
             showError("Please enter both username and password.");
             return;
         }
-
+        
         User user = DummyDataService.getInstance().findUser(username);
         if (user == null) {
             showError("User not found. Please check your username.");

@@ -3,11 +3,13 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.*;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import com.hkust.marketplace.models.User;
 import com.hkust.marketplace.models.UserRole;
 
 public class DatabaseManager {
@@ -38,7 +40,7 @@ public class DatabaseManager {
                 residence_hall TEXT,
                 bio TEXT,
                 preferred_meetup TEXT,
-                active INTEGER NOT NULL DEFAULT 0,
+                active INTEGER NOT NULL DEFAULT 1, -- 1 for active, 0 for deactivated
                 created_at TEXT NOT NULL,
                 average_rating REAL NOT NULL DEFAULT 0,
                 rating_count INTEGER NOT NULL DEFAULT 0
@@ -49,6 +51,7 @@ public class DatabaseManager {
                 CREATE TABLE IF NOT EXISTS listings (
                 listing_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 item_name TEXT NOT NULL,
+                listing_type TEXT NOT NULL CHECK(listing_type IN ('SELL', 'LEND', 'GIVEAWAY')),
                 category TEXT NOT NULL CHECK(category IN (
                     'Textbooks', 'Electronics', 'Furniture', 'Clothing',
                     'Stationery', 'Sports Equipment', 'Kitchenware', 'Others'
@@ -56,6 +59,12 @@ public class DatabaseManager {
                 item_condition TEXT NOT NULL CHECK(item_condition IN (
                     'New', 'Like New', 'Used', 'For Parts'
                 )),
+                listing_status TEXT NOT NULL CHECK(listing_status IN (
+                    'PENDING_REVIEW', 'LIVE', 'REJECTED',
+                    'RESERVED', 'SOLD', 'LENT', 'GIVEN', 'REMOVED')),
+                price REAL,                -- Only for SELL
+                lending_days INTEGER,      -- Only for LEND
+                seller TEXT NOT NULL REFERENCES users(username),
                 description TEXT,
                 numPhotos INTEGER NOT NULL DEFAULT 0,
                 photo1 TEXT,
@@ -71,7 +80,7 @@ public class DatabaseManager {
                     'UG Hall 1', 'UG Hall 2', 'North Gate', 'South Gate',
                     'Shaw Auditorium', 'Coffee Shop (LG5)', 'Sports Hall'
                 )),
-                posted_date DATE NOT NULL,
+                posted_at DATE NOT NULL,
                 availability_status TEXT NOT NULL,
                 views INTEGER NOT NULL DEFAULT 0,
                 approved INTEGER NOT NULL DEFAULT -1
@@ -436,5 +445,4 @@ public class DatabaseManager {
             throw new IllegalStateException("Could not filter rows from " + tableName, e);
         }
     }
-
 }
