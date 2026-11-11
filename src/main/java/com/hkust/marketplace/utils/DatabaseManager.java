@@ -70,7 +70,7 @@ public class DatabaseManager {
                     'UG Hall 1', 'UG Hall 2', 'North Gate', 'South Gate',
                     'Shaw Auditorium', 'Coffee Shop (LG5)', 'Sports Hall'
                 )),
-                posted_date DATE NOT NULL,
+                posted_date DATE,
                 availability_status TEXT NOT NULL,
                 views INTEGER NOT NULL DEFAULT 0,
                 approved INTEGER NOT NULL DEFAULT -1
@@ -105,6 +105,115 @@ public class DatabaseManager {
                 PRIMARY KEY(admin_username, listing_id)
             )
             """);
+
+        migrateListingReviewSchema();
+
+        runSql("""
+            CREATE TABLE IF NOT EXISTS notifications (
+                notification_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                title TEXT NOT NULL,
+                message TEXT NOT NULL,
+                category TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                is_read INTEGER NOT NULL DEFAULT 0
+            )
+            """);
+    }
+
+    /** Upgrades old databases in one transaction, preserving listing IDs and schema objects. */
+    private static void migrateListingReviewSchema() {
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            try (Statement statement = connection.createStatement()) {
+                List<String> columns = new ArrayList<>();
+                boolean requiredPostedDate = false;
+                try (ResultSet result = statement.executeQuery("PRAGMA table_info(listings)")) {
+                    while (result.next()) {
+                        columns.add(result.getString("name"));
+                        if ("posted_date".equals(result.getString("name"))) {
+                            requiredPostedDate = result.getInt("notnull") != 0;
+                        }
+                    }
+                }
+                // SQLite requires rebuilding a table to remove a NOT NULL constraint.
+                if (requiredPostedDate) {
+                    String schema;
+                    try (ResultSet result = statement.executeQuery(
+                            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'listings'")) {
+                        result.next();
+                        schema = result.getString(1);
+                    }
+                    List<String> schemaObjects = new ArrayList<>();
+                    try (ResultSet result = statement.executeQuery("""
+                            SELECT sql FROM sqlite_master WHERE tbl_name = 'listings'
+                                AND type IN ('index', 'trigger') AND sql IS NOT NULL
+                            """)) {
+                        while (result.next()) schemaObjects.add(result.getString(1));
+                    }
+                    long sequence = 0;
+                    try (ResultSet result = statement.executeQuery("SELECT seq FROM sqlite_sequence WHERE name = 'listings'")) {
+                        if (result.next()) sequence = result.getLong(1);
+                    }
+                    String replacement = schema.replaceFirst(
+                            "(?i)CREATE TABLE\\s+(?:IF NOT EXISTS\\s+)?(?:\"listings\"|`listings`|\\[listings\\]|listings)",
+                            "CREATE TABLE listings_review_migration");
+                    String nullableSchema = replacement.replaceFirst("(?i)(\\bposted_date\\s+DATE)\\s+NOT\\s+NULL", "$1");
+                    if (replacement.equals(schema) || nullableSchema.equals(replacement)) {
+                        throw new SQLException("Unsupported legacy listing schema");
+                    }
+                    statement.executeUpdate(nullableSchema);
+                    String columnList = columns.stream().map(column -> "\"" + column.replace("\"", "\"\"") + "\"")
+                            .collect(java.util.stream.Collectors.joining(", "));
+                    statement.executeUpdate("INSERT INTO listings_review_migration (" + columnList + ") SELECT "
+                            + columnList + " FROM listings");
+                    statement.executeUpdate("DROP TABLE listings");
+                    statement.executeUpdate("ALTER TABLE listings_review_migration RENAME TO listings");
+                    for (String sql : schemaObjects) statement.executeUpdate(sql);
+                    try (PreparedStatement update = connection.prepareStatement("UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = 'listings'")) {
+                        update.setLong(1, sequence);
+                        update.executeUpdate();
+                    }
+                }
+                Map<String, String> additions = new LinkedHashMap<>();
+                for (String column : List.of("seller_username", "reviewed_at", "reviewed_by", "rejection_reason",
+                        "submitted_at", "listing_type")) additions.put(column, "TEXT");
+                additions.put("price", "REAL");
+                additions.put("lending_days", "INTEGER");
+                additions.put("review_version", "INTEGER NOT NULL DEFAULT 0");
+                for (Map.Entry<String, String> column : additions.entrySet()) {
+                    if (!columns.contains(column.getKey())) {
+                        statement.executeUpdate("ALTER TABLE listings ADD COLUMN " + column.getKey() + " " + column.getValue());
+                    }
+                }
+                if (!columns.contains("submitted_at")) {
+                    try (PreparedStatement update = connection.prepareStatement(
+                            "UPDATE listings SET submitted_at = COALESCE(NULLIF(TRIM(posted_date), ''), ?)")) {
+                        update.setString(1, LocalDateTime.now().toString());
+                        update.executeUpdate();
+                    }
+                    // Legacy unpublished dates represented submission, rather than publication.
+                    statement.executeUpdate("UPDATE listings SET posted_date = NULL WHERE approved <> 1");
+                }
+                statement.executeUpdate("""
+                        CREATE TRIGGER IF NOT EXISTS listings_review_version
+                        AFTER UPDATE OF item_name, category, item_condition, description, numPhotos,
+                            photo1, photo2, photo3, photo4, photo5, photo6, meetup_location,
+                            posted_date, availability_status, approved, seller_username, reviewed_at,
+                            reviewed_by, rejection_reason, submitted_at, listing_type, price, lending_days ON listings
+                        BEGIN
+                            UPDATE listings SET review_version = OLD.review_version + 1
+                            WHERE listing_id = NEW.listing_id;
+                        END
+                        """);
+                connection.commit();
+            } catch (SQLException | RuntimeException e) {
+                connection.rollback();
+                throw e;
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not upgrade listing review data", e);
+        }
     }
 
     /** Inserts a user only when its username is not already in use, ignoring case. */
@@ -179,12 +288,38 @@ public class DatabaseManager {
                                     String photo4, String photo5, String photo6,
                                     String meetupLocation, String postedDate, String availabilityStatus) {
 
+        return createListing(itemName, category, itemCondition, description, numPhotos,
+                photo1, photo2, photo3, photo4, photo5, photo6,
+                meetupLocation, postedDate, availabilityStatus, null);
+    }
+
+    /** Seller-aware overload; existing callers retain their original signature. */
+    public static int createListing(String itemName, String category, String itemCondition,
+                                    String description, int numPhotos,
+                                    String photo1, String photo2, String photo3,
+                                    String photo4, String photo5, String photo6,
+                                    String meetupLocation, String postedDate, String availabilityStatus,
+                                    String sellerUsername) {
+
+        return createListing(itemName, category, itemCondition, description, numPhotos,
+                photo1, photo2, photo3, photo4, photo5, photo6, meetupLocation, postedDate,
+                availabilityStatus, sellerUsername, null, null, null);
+    }
+
+    /** New pending submissions have a submission date and no publication date yet. */
+    public static int createListing(String itemName, String category, String itemCondition,
+                                    String description, int numPhotos,
+                                    String photo1, String photo2, String photo3,
+                                    String photo4, String photo5, String photo6,
+                                    String meetupLocation, String submittedAt, String availabilityStatus,
+                                    String sellerUsername, String listingType, Double price, Integer lendingDays) {
+
         String sql = """
             INSERT INTO listings (
                 item_name, category, item_condition, description, numPhotos, 
                 photo1, photo2, photo3, photo4, photo5, photo6, 
-                meetup_location, posted_date, availability_status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                meetup_location, submitted_at, availability_status, seller_username, listing_type, price, lending_days
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """;
 
         try (Connection connection = connect();
@@ -202,8 +337,12 @@ public class DatabaseManager {
             stmt.setString(10, photo5);     // Can be null
             stmt.setString(11, photo6);     // Can be null
             stmt.setString(12, meetupLocation);
-            stmt.setString(13, postedDate);
+            stmt.setString(13, submittedAt == null || submittedAt.isBlank() ? LocalDateTime.now().toString() : submittedAt);
             stmt.setString(14, availabilityStatus);
+            stmt.setString(15, sellerUsername);
+            stmt.setString(16, listingType);
+            stmt.setObject(17, price);
+            stmt.setObject(18, lendingDays);
 
             stmt.executeUpdate();
 
@@ -217,6 +356,89 @@ public class DatabaseManager {
             }
         } catch (SQLException e) {
             throw new IllegalStateException("Could not create listing", e);
+        }
+    }
+
+    /** Saves a pending review and its feedback/notification atomically. */
+    static void reviewListing(int listingId, String adminUsername, boolean approved, String reason, long expectedVersion) {
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            try {
+                String seller;
+                String title;
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        SELECT l.item_name, u.username AS recipient
+                        FROM listings l LEFT JOIN users u
+                            ON u.username = l.seller_username COLLATE NOCASE AND u.role = 'SELLER'
+                        WHERE l.listing_id = ? AND l.approved = -1 AND l.review_version = ?
+                        """)) {
+                    statement.setInt(1, listingId);
+                    statement.setLong(2, expectedVersion);
+                    try (ResultSet result = statement.executeQuery()) {
+                        if (!result.next()) {
+                            throw new IllegalStateException("Listing is unavailable or has changed since it was displayed. Please review it again.");
+                        }
+                        seller = result.getString("recipient");
+                        title = result.getString("item_name");
+                        if (seller == null) {
+                            throw new IllegalStateException("Listing must be linked to a seller account before review.");
+                        }
+                    }
+                }
+
+                String reviewedAt = LocalDateTime.now().toString();
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        UPDATE listings SET approved = ?, reviewed_at = ?, reviewed_by = ?, rejection_reason = ?,
+                            posted_date = CASE WHEN ? = 1 AND (posted_date IS NULL OR TRIM(posted_date) = '')
+                                THEN ? ELSE posted_date END
+                        WHERE listing_id = ? AND approved = -1 AND review_version = ?
+                          AND EXISTS (SELECT 1 FROM users
+                              WHERE username = ? COLLATE NOCASE AND role = 'ADMIN' AND active = 1)
+                        """)) {
+                    statement.setInt(1, approved ? 1 : 0);
+                    statement.setString(2, reviewedAt);
+                    statement.setString(3, adminUsername);
+                    statement.setString(4, approved ? null : reason);
+                    statement.setInt(5, approved ? 1 : 0);
+                    statement.setString(6, reviewedAt);
+                    statement.setInt(7, listingId);
+                    statement.setLong(8, expectedVersion);
+                    statement.setString(9, adminUsername);
+                    if (statement.executeUpdate() != 1) {
+                        throw new IllegalStateException("Listing is no longer pending or the admin account is inactive.");
+                    }
+                }
+
+                if (!approved) {
+                    try (PreparedStatement statement = connection.prepareStatement("""
+                            INSERT INTO feedbacks (admin_username, listing_id, reason) VALUES (?, ?, ?)
+                            ON CONFLICT(admin_username, listing_id) DO UPDATE SET reason = excluded.reason
+                            """)) {
+                        statement.setString(1, adminUsername);
+                        statement.setInt(2, listingId);
+                        statement.setString(3, reason);
+                        statement.executeUpdate();
+                    }
+                }
+
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        INSERT INTO notifications (username, title, message, category, timestamp)
+                        VALUES (?, ?, ?, 'System', ?)
+                        """)) {
+                    statement.setString(1, seller);
+                    statement.setString(2, approved ? "Listing Approved" : "Listing Rejected");
+                    statement.setString(3, "Your listing '" + title + "' " + (approved
+                            ? "is now live!" : "was rejected. Reason: " + reason));
+                    statement.setString(4, reviewedAt);
+                    statement.executeUpdate();
+                }
+                connection.commit();
+            } catch (SQLException | RuntimeException e) {
+                connection.rollback();
+                throw e;
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not save listing review. Please try again.", e);
         }
     }
 

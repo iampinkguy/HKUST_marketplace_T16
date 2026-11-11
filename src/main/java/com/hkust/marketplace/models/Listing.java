@@ -22,6 +22,9 @@ public class Listing {
     private String sellerUsername;
     private String sellerFullName;
     private LocalDateTime postedAt;
+    private LocalDateTime submittedAt;
+    private String availabilityStatus;
+    private long reviewVersion;
     private LocalDateTime reviewedAt;
     private String rejectionReason;
     private int viewCount;
@@ -29,6 +32,7 @@ public class Listing {
 
     public Listing() {
         this.postedAt = LocalDateTime.now();
+        this.submittedAt = this.postedAt;
         this.status = ListingStatus.PENDING_REVIEW;
         this.viewCount = 0;
     }
@@ -72,6 +76,15 @@ public class Listing {
 
     public LocalDateTime getPostedAt() { return postedAt; }
     public void setPostedAt(LocalDateTime postedAt) { this.postedAt = postedAt; }
+
+    public LocalDateTime getSubmittedAt() { return submittedAt; }
+    public void setSubmittedAt(LocalDateTime submittedAt) { this.submittedAt = submittedAt; }
+
+    public String getAvailabilityStatus() { return availabilityStatus; }
+    public void setAvailabilityStatus(String availabilityStatus) { this.availabilityStatus = availabilityStatus; }
+
+    public long getReviewVersion() { return reviewVersion; }
+    public void setReviewVersion(long reviewVersion) { this.reviewVersion = reviewVersion; }
 
     public LocalDateTime getReviewedAt() { return reviewedAt; }
     public void setReviewedAt(LocalDateTime reviewedAt) { this.reviewedAt = reviewedAt; }
