@@ -1,5 +1,6 @@
 package com.hkust.marketplace.controllers.seller;
 
+import com.hkust.marketplace.models.UserRole;
 import com.hkust.marketplace.utils.DatabaseManager;
 import com.hkust.marketplace.utils.DataService;
 import com.hkust.marketplace.utils.DummyDataService;
@@ -38,7 +39,7 @@ public class SellerRegisterController {
             showError("Username already taken."); return;
         }
         if (fullName.isEmpty()) { showError("Full Name cannot be empty."); return; }
-        String pwdCheck = DummyDataService.checkPasswordStrength(password);
+        String pwdCheck = DataService.checkPasswordStrength(password);
         if (!"OK".equals(pwdCheck)) { showError(pwdCheck); return; }
         if (!password.equals(confirm)) { showError("Passwords do not match."); return; }
 
@@ -50,7 +51,7 @@ public class SellerRegisterController {
                     normalizedUsername,
                     fullName,
                     DataService.hashPassword(password),
-                    "SELLER",
+                    UserRole.SELLER,
                     null,
                     bio,
                     meetupCombo.getValue()
