@@ -25,7 +25,7 @@
 
             <VBox spacing="6">
                 <Label text="Username" style="-fx-font-weight: 600;"/>
-                <TextField fx:id="usernameField" promptText="admin" prefHeight="40"/>
+                <TextField fx:id="usernameField" promptText="Enter username" prefHeight="40"/>
             </VBox>
             <VBox spacing="6">
                 <Label text="Password" style="-fx-font-weight: 600;"/>
@@ -40,7 +40,5 @@
 
             <Hyperlink text="← Back to Welcome" onAction="#goWelcome"/>
         </VBox>
-        <Label text="Seeded credential: admin / admin123"
-               style="-fx-text-fill: #a0b8d0; -fx-font-size: 12px; -fx-padding: 12 0 0 0;"/>
     </VBox>
 </StackPane>

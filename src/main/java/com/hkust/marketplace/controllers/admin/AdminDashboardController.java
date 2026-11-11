@@ -1,19 +1,25 @@
 package com.hkust.marketplace.controllers.admin;
 
 import com.hkust.marketplace.models.*;
+import com.hkust.marketplace.utils.DataService;
 import com.hkust.marketplace.utils.DummyDataService;
 import com.hkust.marketplace.utils.SceneManager;
 import com.hkust.marketplace.utils.SessionManager;
 import javafx.collections.FXCollections;
+import javafx.event.ActionEvent;
 import javafx.fxml.FXML;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.*;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
 import javafx.scene.layout.*;
 
+import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Optional;
 
 public class AdminDashboardController {
 
@@ -47,7 +53,18 @@ public class AdminDashboardController {
         VBox root = new VBox(14);
         root.setPadding(new Insets(4));
 
-        List<Listing> pending = DummyDataService.getInstance().getPendingListings();
+        List<Listing> pending;
+        try {
+            pending = DataService.getPendingListings();
+        } catch (IllegalStateException | IllegalArgumentException | SecurityException e) {
+            Label error = new Label("Could not load pending listings. " + e.getMessage());
+            error.setWrapText(true);
+            Button retry = new Button("Retry");
+            retry.setOnAction(event -> showReview());
+            root.getChildren().addAll(error, retry);
+            contentPane.getChildren().add(root);
+            return;
+        }
         if (pending.isEmpty()) {
             Label empty = new Label("No listings awaiting review.");
             empty.setStyle("-fx-text-fill: #2e7d32; -fx-font-size: 15px;");
@@ -70,59 +87,199 @@ public class AdminDashboardController {
         Label title = new Label(l.getTitle());
         title.setStyle("-fx-font-weight: bold; -fx-font-size: 16px;");
 
-        Label meta = new Label(String.format("Seller: %s (@%s)  ·  %s  ·  %s  ·  %s",
-                l.getSellerFullName(), l.getSellerUsername(),
-                l.getCategory(), l.getTypeDisplay(), l.getMeetupLocation()));
+        Label meta = new Label(String.format("Seller: %s  ·  %s  ·  %s  ·  %s",
+                sellerDisplay(l), l.getCategory(), typeDisplay(l), l.getMeetupLocation()));
+        meta.setWrapText(true);
         meta.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 12px;");
 
-        Label submitted = new Label("Submitted: " +
-                l.getPostedAt().format(DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm")));
+        Label submitted = new Label("Submitted: " + formatDate(l.getSubmittedAt()) + "  ·  Status: Pending Review");
         submitted.setStyle("-fx-text-fill: #9aa0b0; -fx-font-size: 11px;");
 
-        HBox actions = new HBox(10);
-        Button approve = new Button("Approve");
-        approve.getStyleClass().addAll("btn-success", "btn-sm");
-        approve.setOnAction(e -> {
-            Alert conf = new Alert(Alert.AlertType.CONFIRMATION, "Approve this listing?");
-            conf.showAndWait().ifPresent(r -> {
-                if (r == ButtonType.OK) {
-                    l.setStatus(ListingStatus.LIVE);
-                    l.setReviewedAt(LocalDateTime.now());
-                    DummyDataService.getInstance().updateListing(l);
-                    DummyDataService.getInstance().addNotification(new Notification(
-                            l.getSellerUsername(), "Listing Approved",
-                            "Your listing '" + l.getTitle() + "' is now live!", "System"));
-                    showReview();
-                }
-            });
-        });
+        Button review = new Button("Review details");
+        review.setId("review-listing-" + l.getId());
+        review.getStyleClass().addAll("btn-primary", "btn-sm");
+        review.setOnAction(event -> showListingDetails(l));
+        card.getChildren().addAll(title, meta, submitted, createPhotoGallery(l.getPhotoPaths(), true), review);
+        return card;
+    }
 
-        Button reject = new Button("Reject");
-        reject.getStyleClass().addAll("btn-danger", "btn-sm");
-        reject.setOnAction(e -> {
+    private void showListingDetails(Listing queued) {
+        Listing listing;
+        try {
+            listing = DataService.getListingForReview(queued.getId(), queued.getReviewVersion());
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+            showReviewFailure(queued, ex);
+            showReview();
+            return;
+        }
+        Dialog<ButtonType> details = new Dialog<>();
+        details.setTitle("Review Listing");
+        details.setHeaderText(listing.getTitle() + " (#" + listing.getId() + ")");
+        details.setResizable(true);
+        VBox body = new VBox(12);
+        body.setPadding(new Insets(12));
+        Label fields = new Label(listingDetailsText(listing));
+        fields.setWrapText(true);
+        body.getChildren().addAll(fields, new Label("Photos — select a photo to view it at full size"),
+                createPhotoGallery(listing.getPhotoPaths(), false));
+        ScrollPane scroll = new ScrollPane(body);
+        scroll.setFitToWidth(true);
+        scroll.setPrefViewportWidth(720);
+        scroll.setPrefViewportHeight(520);
+        details.getDialogPane().setContent(scroll);
+        ButtonType approve = new ButtonType("Approve", ButtonBar.ButtonData.OK_DONE);
+        ButtonType reject = new ButtonType("Reject", ButtonBar.ButtonData.OTHER);
+        details.getDialogPane().getButtonTypes().addAll(approve, reject, ButtonType.CANCEL);
+        details.getDialogPane().lookupButton(approve).setId("approve-listing");
+        details.getDialogPane().lookupButton(reject).setId("reject-listing");
+        details.getDialogPane().lookupButton(approve).addEventFilter(ActionEvent.ACTION, event -> {
+            event.consume();
+            confirmListingDecision(details, listing, true);
+        });
+        details.getDialogPane().lookupButton(reject).addEventFilter(ActionEvent.ACTION, event -> {
+            event.consume();
+            confirmListingDecision(details, listing, false);
+        });
+        details.showAndWait();
+    }
+
+    private void confirmListingDecision(Dialog<?> details, Listing listing, boolean approve) {
+        String reason = null;
+        if (!approve) {
             TextInputDialog reasonDialog = new TextInputDialog();
             reasonDialog.setTitle("Rejection Reason");
-            reasonDialog.setHeaderText("Please provide a reason for rejection");
+            reasonDialog.setHeaderText("Enter a written reason for rejecting '" + listing.getTitle() + "'.");
             reasonDialog.setContentText("Reason:");
-            reasonDialog.showAndWait().ifPresent(reason -> {
-                if (reason.isBlank()) {
-                    new Alert(Alert.AlertType.WARNING, "Reason is required.").showAndWait();
-                    return;
+            reasonDialog.getEditor().setId("rejection-reason");
+            reasonDialog.getDialogPane().lookupButton(ButtonType.OK).addEventFilter(ActionEvent.ACTION, event -> {
+                if (reasonDialog.getEditor().getText().isBlank()) {
+                    event.consume();
+                    reasonDialog.setHeaderText("A nonblank rejection reason is required.");
+                    reasonDialog.getEditor().requestFocus();
                 }
-                l.setStatus(ListingStatus.REJECTED);
-                l.setRejectionReason(reason);
-                l.setReviewedAt(LocalDateTime.now());
-                DummyDataService.getInstance().updateListing(l);
-                DummyDataService.getInstance().addNotification(new Notification(
-                        l.getSellerUsername(), "Listing Rejected",
-                        "Your listing '" + l.getTitle() + "' was rejected. Reason: " + reason, "System"));
-                showReview();
             });
-        });
+            Optional<String> entered = reasonDialog.showAndWait();
+            if (entered.isEmpty()) {
+                details.close();
+                return;
+            }
+            reason = entered.get().trim();
+        }
+        String decision = approve ? "Approve" : "Reject";
+        Alert confirmation = new Alert(Alert.AlertType.CONFIRMATION);
+        confirmation.setTitle("Confirm Listing Decision");
+        confirmation.setHeaderText(decision + " '" + listing.getTitle() + "' (#" + listing.getId() + ")?");
+        confirmation.setContentText("Seller: " + sellerDisplay(listing) + "\nType: " + typeDisplay(listing)
+                + "\nDecision: " + decision + (approve ? " — publish listing" : "\nReason: " + reason));
+        if (confirmation.showAndWait().orElse(ButtonType.CANCEL) != ButtonType.OK) {
+            details.close();
+            return;
+        }
+        try {
+            if (approve) DataService.approveListing(listing.getId(), listing.getReviewVersion());
+            else DataService.rejectListing(listing.getId(), reason, listing.getReviewVersion());
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+            showReviewFailure(listing, ex);
+            details.close();
+            showReview();
+            return;
+        }
+        showReview();
+        Alert success = new Alert(Alert.AlertType.INFORMATION, approve
+                ? "Listing approved and published. An approval notification has been saved for the seller."
+                : "Listing rejected. A notification containing the reason has been saved for the seller.");
+        success.setTitle("Listing Decision Saved");
+        success.showAndWait();
+        details.close();
+    }
 
-        actions.getChildren().addAll(approve, reject);
-        card.getChildren().addAll(title, meta, submitted, actions);
-        return card;
+    private void showReviewFailure(Listing displayed, RuntimeException failure) {
+        String message = failure.getMessage();
+        try {
+            Listing current = DataService.getListingForAdmin(displayed.getId());
+            message += current == null ? "\n\nCurrent state: listing no longer exists."
+                    : "\n\nCurrent listing state:\n" + listingDetailsText(current);
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+            message += "\nCurrent listing state could not be loaded. " + ex.getMessage();
+        }
+        Alert alert = new Alert(Alert.AlertType.ERROR);
+        alert.setTitle("Listing Decision Not Saved");
+        alert.setHeaderText("Refresh the queue and review the current submission.");
+        TextArea text = new TextArea(message);
+        text.setEditable(false);
+        text.setWrapText(true);
+        text.setPrefRowCount(12);
+        alert.getDialogPane().setContent(text);
+        alert.setResizable(true);
+        alert.showAndWait();
+    }
+
+    private String listingDetailsText(Listing listing) {
+        String text = "Title: " + listing.getTitle() + " (#" + listing.getId() + ")"
+                + "\nSeller: " + sellerDisplay(listing)
+                + "\nCategory: " + listing.getCategory()
+                + "\nListing Type: " + typeDisplay(listing)
+                + "\nStatus: " + listing.getStatus().name().replace('_', ' ')
+                + "\nMeetup location: " + listing.getMeetupLocation()
+                + "\nSubmitted: " + formatDate(listing.getSubmittedAt())
+                + "\nFirst posted: " + formatDate(listing.getPostedAt())
+                + "\nCondition: " + listing.getCondition()
+                + "\nAvailability: " + listing.getAvailabilityStatus();
+        if (listing.getType() == ListingType.SELL) text += "\nPrice: "
+                + (listing.getPrice() == null ? "Not recorded" : String.format("HK$ %.2f", listing.getPrice()));
+        if (listing.getType() == ListingType.LEND) text += "\nLending duration: "
+                + (listing.getLendingDays() == null ? "Not recorded" : listing.getLendingDays() + " days");
+        text += "\nDescription: " + (listing.getDescription() == null ? "" : listing.getDescription());
+        if (listing.getRejectionReason() != null) text += "\nRejection reason: " + listing.getRejectionReason();
+        return text;
+    }
+
+    private String sellerDisplay(Listing listing) {
+        return listing.getSellerUsername() == null ? "Not recorded"
+                : listing.getSellerFullName() + " (@" + listing.getSellerUsername() + ")";
+    }
+
+    private String typeDisplay(Listing listing) {
+        return listing.getType() == null ? "Not recorded" : listing.getTypeDisplay();
+    }
+
+    private String formatDate(LocalDateTime date) {
+        return date == null ? "Not set" : date.format(DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm"));
+    }
+
+    private FlowPane createPhotoGallery(List<String> paths, boolean thumbnails) {
+        FlowPane gallery = new FlowPane(10, 10);
+        gallery.setPrefWrapLength(thumbnails ? 600 : 680);
+        if (paths.isEmpty()) gallery.getChildren().add(new Label("No photos supplied."));
+        for (int index = 0; index < paths.size(); index++) {
+            String path = paths.get(index);
+            try {
+                String uri = path.startsWith("file:") ? path : Path.of(path).toAbsolutePath().toUri().toString();
+                Image image = new Image(uri, false);
+                if (image.isError()) throw new IllegalArgumentException("Photo could not be opened");
+                ImageView preview = new ImageView(image);
+                preview.setPreserveRatio(true);
+                preview.setFitWidth(thumbnails ? 110 : 300);
+                preview.setFitHeight(thumbnails ? 85 : 230);
+                Button photo = new Button("Photo " + (index + 1), preview);
+                photo.setContentDisplay(ContentDisplay.TOP);
+                photo.setOnAction(event -> {
+                    Dialog<ButtonType> fullPhoto = new Dialog<>();
+                    fullPhoto.setTitle("Listing Photo");
+                    fullPhoto.setResizable(true);
+                    ScrollPane scroll = new ScrollPane(new ImageView(image));
+                    scroll.setPrefViewportWidth(720);
+                    scroll.setPrefViewportHeight(500);
+                    fullPhoto.getDialogPane().setContent(scroll);
+                    fullPhoto.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+                    fullPhoto.showAndWait();
+                });
+                gallery.getChildren().add(photo);
+            } catch (IllegalArgumentException ex) {
+                gallery.getChildren().add(new Label("Photo " + (index + 1) + " unavailable."));
+            }
+        }
+        return gallery;
     }
 
     @FXML

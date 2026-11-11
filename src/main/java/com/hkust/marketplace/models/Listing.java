@@ -24,12 +24,17 @@ public class Listing {
     // private LocalDateTime reviewedAt;  // fetch from `feedback` table
     // private String rejectionReason;   // fetch from `feedback` table
     private String availabilityStatus; // Available / Unavailable
+    private LocalDateTime submittedAt;
+    private long reviewVersion;
+    private LocalDateTime reviewedAt;
+    private String rejectionReason;
     private int viewCount;
     private List<String> photoPaths = new ArrayList<>(); // At most 6 photos
     private boolean isApproved; // Whether the listing has been approved by admin
 
     public Listing() {
         this.postedAt = LocalDateTime.now();
+        this.submittedAt = this.postedAt;
         this.status = ListingStatus.PENDING_REVIEW;
         this.viewCount = 0;
     }
@@ -71,8 +76,17 @@ public class Listing {
     public LocalDateTime getPostedAt() { return postedAt; }
     public void setPostedAt(LocalDateTime postedAt) { this.postedAt = postedAt; }
 
+    public LocalDateTime getSubmittedAt() { return submittedAt; }
+    public void setSubmittedAt(LocalDateTime submittedAt) { this.submittedAt = submittedAt; }
+
     public String getAvailabilityStatus() { return availabilityStatus; }
     public void setAvailabilityStatus(String availabilityStatus) { this.availabilityStatus = availabilityStatus; }
+
+    public long getReviewVersion() { return reviewVersion; }
+    public void setReviewVersion(long reviewVersion) { this.reviewVersion = reviewVersion; }
+
+    public LocalDateTime getReviewedAt() { return reviewedAt; }
+    public void setReviewedAt(LocalDateTime reviewedAt) { this.reviewedAt = reviewedAt; }
 
     public boolean isApproved() { return isApproved; }
     public void setIsApproved(boolean isApproved) { this.isApproved = isApproved; }
