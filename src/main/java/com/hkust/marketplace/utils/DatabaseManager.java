@@ -9,6 +9,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import com.hkust.marketplace.models.Listing;
+import com.hkust.marketplace.models.Notification;
 import com.hkust.marketplace.models.User;
 import com.hkust.marketplace.models.UserRole;
 
@@ -87,6 +89,8 @@ public class DatabaseManager {
             )
             """);
 
+        migrateListingSchema();
+
         runSql("""
                 CREATE TABLE IF NOT EXISTS offers (
                 buyer_username STRING NOT NULL,
@@ -115,6 +119,50 @@ public class DatabaseManager {
                 PRIMARY KEY(admin_username, listing_id)
             )
             """);
+
+        runSql("""
+                CREATE TABLE IF NOT EXISTS notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username STRING NOT NULL,
+                sender STRING NOT NULL,
+                title STRING NOT NULL,
+                message STRING NOT NULL,
+                category STRING NOT NULL,
+                timestamp TEXT NOT NULL,
+                read INTEGER NOT NULL DEFAULT 0
+            )
+            """);
+
+        runSql("""
+                CREATE TABLE IF NOT EXISTS favourites (
+                buyer_username TEXT NOT NULL REFERENCES users(username),
+                listing_id INTEGER NOT NULL REFERENCES listings(listing_id),
+                PRIMARY KEY (buyer_username, listing_id)
+            )
+            """);
+    }
+
+    private static void migrateListingSchema() {
+        addListingColumnIfMissing("listing_type", "TEXT NOT NULL DEFAULT 'SELL'");
+        addListingColumnIfMissing("listing_status", "TEXT NOT NULL DEFAULT 'LIVE'");
+        addListingColumnIfMissing("price", "REAL");
+        addListingColumnIfMissing("lending_days", "INTEGER");
+        addListingColumnIfMissing("seller", "TEXT");
+    }
+
+    private static void addListingColumnIfMissing(String column, String definition) {
+        try (Connection connection = connect();
+             PreparedStatement statement = connection.prepareStatement("PRAGMA table_info(listings)");
+             ResultSet result = statement.executeQuery()) {
+            while (result.next()) {
+                if (column.equalsIgnoreCase(result.getString("name"))) {
+                    return;
+                }
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not inspect listings schema", e);
+        }
+        runSql("ALTER TABLE listings ADD COLUMN " + column + " " + definition);
     }
 
     public static boolean usernameExists(String username) {
@@ -249,6 +297,93 @@ public class DatabaseManager {
             stmt.executeUpdate();
         } catch (SQLException e) {
             throw new IllegalStateException("Could not create offer", e);
+        }
+    }
+
+    public static List<Map<String, Object>> fetchBuyerOffers(String buyerUsername) {
+        String sql = """
+            SELECT o.buyer_username, o.listing_id, o.price, o.chatbox_id,
+                   l.item_name, l.listing_type, l.listing_status, l.posted_at,
+                   l.seller, u.full_name AS seller_name
+            FROM offers o
+            JOIN listings l ON l.listing_id = o.listing_id
+            JOIN users u ON u.username = l.seller
+            WHERE o.buyer_username = ?
+            ORDER BY l.posted_at DESC
+            """;
+        return fetchQuery(sql, buyerUsername);
+    }
+
+    public static List<Listing> fetchFavouriteListings(String buyerUsername) {
+        String sql = """
+            SELECT l.* FROM listings l
+            JOIN favourites f ON f.listing_id = l.listing_id
+            WHERE f.buyer_username = ?
+            ORDER BY l.posted_at DESC
+            """;
+        List<Listing> listings = new ArrayList<>();
+        for (Map<String, Object> row : fetchQuery(sql, buyerUsername)) {
+            listings.add(DataService.toListing(row));
+        }
+        return listings;
+    }
+
+    public static void setFavourite(String buyerUsername, int listingId, boolean favourite) {
+        String sql = favourite
+                ? "INSERT OR IGNORE INTO favourites (buyer_username, listing_id) VALUES (?, ?)"
+                : "DELETE FROM favourites WHERE buyer_username = ? AND listing_id = ?";
+        try (Connection connection = connect();
+             PreparedStatement stmt = connection.prepareStatement(sql)) {
+            stmt.setString(1, buyerUsername);
+            stmt.setInt(2, listingId);
+            stmt.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not update favourite listing", e);
+        }
+    }
+
+    public static void updateUserProfile(String username, String fullName,
+                                         String residenceHall, String bio,
+                                         String preferredMeetup, String passwordHash) {
+        String sql = """
+            UPDATE users
+            SET full_name = ?, residence_hall = ?, bio = ?,
+                preferred_meetup = ?, password_hash = COALESCE(?, password_hash)
+            WHERE username = ?
+            """;
+        try (Connection connection = connect();
+             PreparedStatement stmt = connection.prepareStatement(sql)) {
+            stmt.setString(1, fullName);
+            stmt.setString(2, residenceHall);
+            stmt.setString(3, bio);
+            stmt.setString(4, preferredMeetup);
+            stmt.setString(5, passwordHash);
+            stmt.setString(6, username);
+            stmt.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not update user profile", e);
+        }
+    }
+
+    public static void createNotification(String username, String sender, String title, String message, String category) {
+        String sql = """
+        INSERT INTO notifications (username, sender, title, message, category, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """;
+
+        try (Connection connection = connect();
+             PreparedStatement stmt = connection.prepareStatement(sql)) {
+
+            stmt.setString(1, username);
+            stmt.setString(2, sender);
+            stmt.setString(3, title);
+            stmt.setString(4, message);
+            stmt.setString(5, category);
+            stmt.setString(6, LocalDateTime.now().toString());
+
+            stmt.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not create notification", e);
         }
     }
 
@@ -443,6 +578,46 @@ public class DatabaseManager {
             return rows;
         } catch (SQLException e) {
             throw new IllegalStateException("Could not filter rows from " + tableName, e);
+        }
+    }
+
+    public static List<Listing> fetchListings(Map<String, Object> filters) {
+        List<Map<String, Object>> rows = fetchRows("listings", filters);
+        List<Listing> listings = new ArrayList<>();
+
+        for (Map<String, Object> row : rows) {
+            listings.add(DataService.toListing(row));
+        }
+
+        return listings;
+    }
+
+    public static List<Notification> fetchNotifications(String username) {
+        List<Map<String, Object>> rows = fetchRows("notifications", Map.of("username", username));
+        List<Notification> notifications = new ArrayList<>();
+
+        for (Map<String, Object> row : rows) {
+            notifications.add(DataService.toNotification(row));
+        }
+
+        return notifications;
+    }
+
+    private static List<Map<String, Object>> fetchQuery(String sql, Object... parameters) {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        try (Connection connection = connect();
+             PreparedStatement stmt = connection.prepareStatement(sql)) {
+            for (int i = 0; i < parameters.length; i++) {
+                stmt.setObject(i + 1, parameters[i]);
+            }
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    rows.add(resultSetToMap(rs));
+                }
+            }
+            return rows;
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not execute database query", e);
         }
     }
 }

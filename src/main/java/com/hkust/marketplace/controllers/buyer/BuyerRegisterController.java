@@ -4,7 +4,6 @@ import com.hkust.marketplace.models.User;
 import com.hkust.marketplace.models.UserRole;
 import com.hkust.marketplace.utils.DataService;
 import com.hkust.marketplace.utils.DatabaseManager;
-import com.hkust.marketplace.utils.DummyDataService;
 import com.hkust.marketplace.utils.SceneManager;
 import javafx.collections.FXCollections;
 import javafx.fxml.FXML;
