@@ -1,6 +1,8 @@
 package com.hkust.marketplace.controllers.seller;
 
 import com.hkust.marketplace.models.*;
+import com.hkust.marketplace.utils.DataService;
+import com.hkust.marketplace.utils.DatabaseManager;
 import com.hkust.marketplace.utils.DummyDataService;
 import com.hkust.marketplace.utils.SceneManager;
 import com.hkust.marketplace.utils.SessionManager;
@@ -368,6 +370,8 @@ public class SellerDashboardController {
         TextField name = new TextField(user != null ? user.getFullName() : "");
         PasswordField pass = new PasswordField();
         pass.setPromptText("New password (optional)");
+        PasswordField confirmation = new PasswordField();
+        confirmation.setPromptText("Confirm new password");
         TextArea bio = new TextArea(user != null && user.getBio() != null ? user.getBio() : "");
         bio.setPrefRowCount(3);
         ComboBox<String> meetup = new ComboBox<>(FXCollections.observableArrayList(DummyDataService.HKUST_LOCATIONS));
@@ -376,15 +380,70 @@ public class SellerDashboardController {
 
         Button save = new Button("Save Changes");
         save.getStyleClass().add("btn-gold");
-        save.setOnAction(e -> new Alert(Alert.AlertType.INFORMATION, "Profile saved (demo).").showAndWait());
+        save.setOnAction(e -> saveProfile(user, name, pass, confirmation, bio, meetup));
+        Button cancel = new Button("Cancel");
+        cancel.getStyleClass().add("btn-outline");
+        cancel.setOnAction(e -> showProfile());
 
         form.getChildren().addAll(
                 new Label("Full Name"), name,
                 new Label("New Password"), pass,
+                new Label("Confirm New Password"), confirmation,
                 new Label("Bio"), bio,
                 new Label("Preferred Meet-up"), meetup,
-                save);
+                new HBox(8, save, cancel));
         contentPane.getChildren().add(form);
+    }
+
+    private void saveProfile(User user, TextField name, PasswordField password,
+                             PasswordField confirmation, TextArea bio, ComboBox<String> meetup) {
+        if (user == null) {
+            showProfileError("Could not save your profile because you are not logged in.");
+            return;
+        }
+
+        String fullName = name.getText().trim();
+        if (fullName.isEmpty()) {
+            showProfileError("Full name cannot be empty.");
+            return;
+        }
+
+        String passwordHash = null;
+        String newPassword = password.getText();
+        if (!newPassword.isEmpty()) {
+            if (!newPassword.equals(confirmation.getText())) {
+                showProfileError("Passwords do not match.");
+                return;
+            }
+            String passwordCheck = DataService.checkPasswordStrength(newPassword);
+            if (!"OK".equals(passwordCheck)) {
+                showProfileError(passwordCheck);
+                return;
+            }
+            passwordHash = DataService.hashPassword(newPassword);
+        }
+
+        String updatedBio = bio.getText() == null || bio.getText().isBlank()
+                ? null : bio.getText().trim();
+        String updatedMeetup = meetup.getValue();
+        try {
+            DatabaseManager.updateUserProfile(user.getUsername(), fullName, user.getResidenceHall(),
+                    updatedBio, updatedMeetup, passwordHash);
+        } catch (IllegalStateException e) {
+            showProfileError("Could not save your profile: " + e.getMessage());
+            return;
+        }
+
+        user.setFullName(fullName);
+        user.setBio(updatedBio);
+        user.setPreferredMeetup(updatedMeetup);
+        if (passwordHash != null) user.setPasswordHash(passwordHash);
+        welcomeLabel.setText("Hello, " + fullName);
+        new Alert(Alert.AlertType.INFORMATION, "Profile updated successfully.").showAndWait();
+    }
+
+    private void showProfileError(String message) {
+        new Alert(Alert.AlertType.ERROR, message).showAndWait();
     }
 
     @FXML
