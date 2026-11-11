@@ -293,15 +293,5 @@ public class DummyDataService {
     }
 
     // Password strength helper (demo)
-    public static String checkPasswordStrength(String password) {
-        if (password == null || password.isEmpty()) return "Password cannot be empty.";
-        if (password.length() < 8) return "Password must be at least 8 characters.";
-        boolean hasUpper = password.chars().anyMatch(Character::isUpperCase);
-        boolean hasLower = password.chars().anyMatch(Character::isLowerCase);
-        boolean hasDigit = password.chars().anyMatch(Character::isDigit);
-        if (!hasUpper || !hasLower || !hasDigit) {
-            return "Password should contain uppercase, lowercase and a digit.";
-        }
-        return "OK";
-    }
+    
 }

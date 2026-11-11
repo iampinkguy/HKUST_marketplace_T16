@@ -10,7 +10,7 @@ import java.util.List;
  */
 public class Listing {
     private String id;
-    private String title;
+    private String itemName;
     private String description;
     private String category;
     private ListingType type;
@@ -20,15 +20,17 @@ public class Listing {
     private Integer lendingDays;       // Only for LEND
     private String meetupLocation;
     private String sellerUsername;
-    private String sellerFullName;
     private LocalDateTime postedAt;
+    // private LocalDateTime reviewedAt;  // fetch from `feedback` table
+    // private String rejectionReason;   // fetch from `feedback` table
+    private String availabilityStatus; // Available / Unavailable
     private LocalDateTime submittedAt;
-    private String availabilityStatus;
     private long reviewVersion;
     private LocalDateTime reviewedAt;
     private String rejectionReason;
     private int viewCount;
-    private List<String> photoPaths = new ArrayList<>(); // Demo: placeholder paths
+    private List<String> photoPaths = new ArrayList<>(); // At most 6 photos
+    private boolean isApproved; // Whether the listing has been approved by admin
 
     public Listing() {
         this.postedAt = LocalDateTime.now();
@@ -41,8 +43,8 @@ public class Listing {
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
 
-    public String getTitle() { return title; }
-    public void setTitle(String title) { this.title = title; }
+    public String getItemName() { return itemName; }
+    public void setItemName(String itemName) { this.itemName = itemName; }
 
     public String getDescription() { return description; }
     public void setDescription(String description) { this.description = description; }
@@ -68,11 +70,8 @@ public class Listing {
     public String getMeetupLocation() { return meetupLocation; }
     public void setMeetupLocation(String meetupLocation) { this.meetupLocation = meetupLocation; }
 
-    public String getSellerUsername() { return sellerUsername; }
-    public void setSellerUsername(String sellerUsername) { this.sellerUsername = sellerUsername; }
-
-    public String getSellerFullName() { return sellerFullName; }
-    public void setSellerFullName(String sellerFullName) { this.sellerFullName = sellerFullName; }
+    public String getSeller() { return sellerUsername; }
+    public void setSeller(String sellerUsername) { this.sellerUsername = sellerUsername; }
 
     public LocalDateTime getPostedAt() { return postedAt; }
     public void setPostedAt(LocalDateTime postedAt) { this.postedAt = postedAt; }
@@ -89,14 +88,20 @@ public class Listing {
     public LocalDateTime getReviewedAt() { return reviewedAt; }
     public void setReviewedAt(LocalDateTime reviewedAt) { this.reviewedAt = reviewedAt; }
 
-    public String getRejectionReason() { return rejectionReason; }
-    public void setRejectionReason(String rejectionReason) { this.rejectionReason = rejectionReason; }
+    public boolean isApproved() { return isApproved; }
+    public void setIsApproved(boolean isApproved) { this.isApproved = isApproved; }
 
     public int getViewCount() { return viewCount; }
     public void setViewCount(int viewCount) { this.viewCount = viewCount; }
 
     public List<String> getPhotoPaths() { return photoPaths; }
-    public void setPhotoPaths(List<String> photoPaths) { this.photoPaths = photoPaths; }
+    public void addPhotoPath(String photoPath) {
+        if (photoPaths.size() < 6) {
+            photoPaths.add(photoPath);
+        } else {
+            throw new IllegalStateException("Cannot add more than 6 photos.");
+        }
+    }
 
     public String getPriceDisplay() {
         if (type == ListingType.SELL && price != null) {

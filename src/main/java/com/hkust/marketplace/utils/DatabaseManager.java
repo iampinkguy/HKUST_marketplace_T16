@@ -9,6 +9,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import com.hkust.marketplace.models.Listing;
+import com.hkust.marketplace.models.Notification;
+import com.hkust.marketplace.models.User;
+import com.hkust.marketplace.models.UserRole;
+
 public class DatabaseManager {
 
     private static final String URL = "jdbc:sqlite:data.db";
@@ -37,7 +42,7 @@ public class DatabaseManager {
                 residence_hall TEXT,
                 bio TEXT,
                 preferred_meetup TEXT,
-                active INTEGER NOT NULL DEFAULT 1,
+                active INTEGER NOT NULL DEFAULT 1, -- 1 for active, 0 for deactivated
                 created_at TEXT NOT NULL,
                 average_rating REAL NOT NULL DEFAULT 0,
                 rating_count INTEGER NOT NULL DEFAULT 0
@@ -48,6 +53,7 @@ public class DatabaseManager {
                 CREATE TABLE IF NOT EXISTS listings (
                 listing_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 item_name TEXT NOT NULL,
+                listing_type TEXT NOT NULL CHECK(listing_type IN ('SELL', 'LEND', 'GIVEAWAY')),
                 category TEXT NOT NULL CHECK(category IN (
                     'Textbooks', 'Electronics', 'Furniture', 'Clothing',
                     'Stationery', 'Sports Equipment', 'Kitchenware', 'Others'
@@ -55,6 +61,12 @@ public class DatabaseManager {
                 item_condition TEXT NOT NULL CHECK(item_condition IN (
                     'New', 'Like New', 'Used', 'For Parts'
                 )),
+                listing_status TEXT NOT NULL CHECK(listing_status IN (
+                    'PENDING_REVIEW', 'LIVE', 'REJECTED',
+                    'RESERVED', 'SOLD', 'LENT', 'GIVEN', 'REMOVED')),
+                price REAL,                -- Only for SELL
+                lending_days INTEGER,      -- Only for LEND
+                seller TEXT NOT NULL REFERENCES users(username),
                 description TEXT,
                 numPhotos INTEGER NOT NULL DEFAULT 0,
                 photo1 TEXT,
@@ -70,12 +82,14 @@ public class DatabaseManager {
                     'UG Hall 1', 'UG Hall 2', 'North Gate', 'South Gate',
                     'Shaw Auditorium', 'Coffee Shop (LG5)', 'Sports Hall'
                 )),
-                posted_date DATE,
+                posted_at DATE NOT NULL,
                 availability_status TEXT NOT NULL,
                 views INTEGER NOT NULL DEFAULT 0,
                 approved INTEGER NOT NULL DEFAULT -1
             )
             """);
+
+        migrateListingSchema();
 
         runSql("""
                 CREATE TABLE IF NOT EXISTS offers (
@@ -106,6 +120,49 @@ public class DatabaseManager {
             )
             """);
 
+        runSql("""
+                CREATE TABLE IF NOT EXISTS notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username STRING NOT NULL,
+                sender STRING NOT NULL,
+                title STRING NOT NULL,
+                message STRING NOT NULL,
+                category STRING NOT NULL,
+                timestamp TEXT NOT NULL,
+                read INTEGER NOT NULL DEFAULT 0
+            )
+            """);
+
+        runSql("""
+                CREATE TABLE IF NOT EXISTS favourites (
+                buyer_username TEXT NOT NULL REFERENCES users(username),
+                listing_id INTEGER NOT NULL REFERENCES listings(listing_id),
+                PRIMARY KEY (buyer_username, listing_id)
+            )
+            """);
+    }
+
+    private static void migrateListingSchema() {
+        addListingColumnIfMissing("listing_type", "TEXT NOT NULL DEFAULT 'SELL'");
+        addListingColumnIfMissing("listing_status", "TEXT NOT NULL DEFAULT 'LIVE'");
+        addListingColumnIfMissing("price", "REAL");
+        addListingColumnIfMissing("lending_days", "INTEGER");
+        addListingColumnIfMissing("seller", "TEXT");
+    }
+
+    private static void addListingColumnIfMissing(String column, String definition) {
+        try (Connection connection = connect();
+             PreparedStatement statement = connection.prepareStatement("PRAGMA table_info(listings)");
+             ResultSet result = statement.executeQuery()) {
+            while (result.next()) {
+                if (column.equalsIgnoreCase(result.getString("name"))) {
+                    return;
+                }
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not inspect listings schema", e);
+        }
+        runSql("ALTER TABLE listings ADD COLUMN " + column + " " + definition);
         migrateListingReviewSchema();
 
         runSql("""
@@ -256,9 +313,18 @@ public class DatabaseManager {
         }
     }
 
-
     public static void createUser(String username, String fullName, String passwordHash,
                                   String role, String residenceHall, String bio, String preferredMeetup) {
+
+        switch (role) {
+            case "BUYER", "SELLER", "ADMIN" -> createUser(username, fullName, passwordHash, UserRole.valueOf(role), residenceHall, bio, preferredMeetup);
+            default -> throw new IllegalArgumentException("Invalid role: " + role);
+        }
+    }
+
+
+    public static void createUser(String username, String fullName, String passwordHash,
+                                  UserRole role, String residenceHall, String bio, String preferredMeetup) {
         String sql = """
             INSERT INTO users (username, full_name, password_hash, role, residence_hall, bio, preferred_meetup, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -270,7 +336,7 @@ public class DatabaseManager {
             stmt.setString(1, username);
             stmt.setString(2, fullName);
             stmt.setString(3, passwordHash);
-            stmt.setString(4, role);
+            stmt.setString(4, role.name());
             stmt.setString(5, residenceHall);     // Can be null
             stmt.setString(6, bio);               // Can be null
             stmt.setString(7, preferredMeetup);   // Can be null
@@ -481,6 +547,93 @@ public class DatabaseManager {
         }
     }
 
+    public static List<Map<String, Object>> fetchBuyerOffers(String buyerUsername) {
+        String sql = """
+            SELECT o.buyer_username, o.listing_id, o.price, o.chatbox_id,
+                   l.item_name, l.listing_type, l.listing_status, l.posted_at,
+                   l.seller, u.full_name AS seller_name
+            FROM offers o
+            JOIN listings l ON l.listing_id = o.listing_id
+            JOIN users u ON u.username = l.seller
+            WHERE o.buyer_username = ?
+            ORDER BY l.posted_at DESC
+            """;
+        return fetchQuery(sql, buyerUsername);
+    }
+
+    public static List<Listing> fetchFavouriteListings(String buyerUsername) {
+        String sql = """
+            SELECT l.* FROM listings l
+            JOIN favourites f ON f.listing_id = l.listing_id
+            WHERE f.buyer_username = ?
+            ORDER BY l.posted_at DESC
+            """;
+        List<Listing> listings = new ArrayList<>();
+        for (Map<String, Object> row : fetchQuery(sql, buyerUsername)) {
+            listings.add(DataService.toListing(row));
+        }
+        return listings;
+    }
+
+    public static void setFavourite(String buyerUsername, int listingId, boolean favourite) {
+        String sql = favourite
+                ? "INSERT OR IGNORE INTO favourites (buyer_username, listing_id) VALUES (?, ?)"
+                : "DELETE FROM favourites WHERE buyer_username = ? AND listing_id = ?";
+        try (Connection connection = connect();
+             PreparedStatement stmt = connection.prepareStatement(sql)) {
+            stmt.setString(1, buyerUsername);
+            stmt.setInt(2, listingId);
+            stmt.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not update favourite listing", e);
+        }
+    }
+
+    public static void updateUserProfile(String username, String fullName,
+                                         String residenceHall, String bio,
+                                         String preferredMeetup, String passwordHash) {
+        String sql = """
+            UPDATE users
+            SET full_name = ?, residence_hall = ?, bio = ?,
+                preferred_meetup = ?, password_hash = COALESCE(?, password_hash)
+            WHERE username = ?
+            """;
+        try (Connection connection = connect();
+             PreparedStatement stmt = connection.prepareStatement(sql)) {
+            stmt.setString(1, fullName);
+            stmt.setString(2, residenceHall);
+            stmt.setString(3, bio);
+            stmt.setString(4, preferredMeetup);
+            stmt.setString(5, passwordHash);
+            stmt.setString(6, username);
+            stmt.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not update user profile", e);
+        }
+    }
+
+    public static void createNotification(String username, String sender, String title, String message, String category) {
+        String sql = """
+        INSERT INTO notifications (username, sender, title, message, category, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """;
+
+        try (Connection connection = connect();
+             PreparedStatement stmt = connection.prepareStatement(sql)) {
+
+            stmt.setString(1, username);
+            stmt.setString(2, sender);
+            stmt.setString(3, title);
+            stmt.setString(4, message);
+            stmt.setString(5, category);
+            stmt.setString(6, LocalDateTime.now().toString());
+
+            stmt.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not create notification", e);
+        }
+    }
+
     public static void deleteData(String tableName, String key) {
         // Determine the primary key column based on the table name
         String pkColumn = tableName.equals("users") ? "username" : "id";
@@ -680,4 +833,43 @@ public class DatabaseManager {
         }
     }
 
+    public static List<Listing> fetchListings(Map<String, Object> filters) {
+        List<Map<String, Object>> rows = fetchRows("listings", filters);
+        List<Listing> listings = new ArrayList<>();
+
+        for (Map<String, Object> row : rows) {
+            listings.add(DataService.toListing(row));
+        }
+
+        return listings;
+    }
+
+    public static List<Notification> fetchNotifications(String username) {
+        List<Map<String, Object>> rows = fetchRows("notifications", Map.of("username", username));
+        List<Notification> notifications = new ArrayList<>();
+
+        for (Map<String, Object> row : rows) {
+            notifications.add(DataService.toNotification(row));
+        }
+
+        return notifications;
+    }
+
+    private static List<Map<String, Object>> fetchQuery(String sql, Object... parameters) {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        try (Connection connection = connect();
+             PreparedStatement stmt = connection.prepareStatement(sql)) {
+            for (int i = 0; i < parameters.length; i++) {
+                stmt.setObject(i + 1, parameters[i]);
+            }
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    rows.add(resultSetToMap(rs));
+                }
+            }
+            return rows;
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not execute database query", e);
+        }
+    }
 }

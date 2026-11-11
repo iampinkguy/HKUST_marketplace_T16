@@ -2,8 +2,8 @@ package com.hkust.marketplace.controllers.buyer;
 
 import com.hkust.marketplace.models.User;
 import com.hkust.marketplace.models.UserRole;
+import com.hkust.marketplace.utils.DataService;
 import com.hkust.marketplace.utils.DatabaseManager;
-import com.hkust.marketplace.utils.DummyDataService;
 import com.hkust.marketplace.utils.SceneManager;
 import javafx.collections.FXCollections;
 import javafx.fxml.FXML;
@@ -18,6 +18,7 @@ public class BuyerRegisterController {
     @FXML private ComboBox<String> residenceCombo;
     @FXML private Label errorLabel;
     @FXML private Label successLabel;
+
 
     @FXML
     public void initialize() {
@@ -49,24 +50,28 @@ public class BuyerRegisterController {
             showError("Full Name cannot be empty.");
             return;
         }
-        String pwdCheck = DummyDataService.checkPasswordStrength(password);
+        String pwdCheck = DataService.checkPasswordStrength(password);
         if (!"OK".equals(pwdCheck)) {
             showError(pwdCheck);
             return;
         }
         if (!password.equals(confirm)) {
             showError("Passwords do not match.");
+            confirmPasswordField.clear();
             return;
         }
 
-        // Create user (demo – password stored as-is)
-        User user = new User(username.toLowerCase(), fullName, password, UserRole.BUYER);
+        String passwordHash = DataService.hashPassword(password);
+        User user = new User(username.toLowerCase(), fullName, passwordHash, UserRole.BUYER);
         if (residence != null) {
             user.setResidenceHall(residence);
         }
-        DummyDataService.getInstance().registerUser(user);
-
-        showSuccess("Registration successful! You can now login.");
+        try {
+            DatabaseManager.createUser(username, fullName, passwordHash, UserRole.BUYER, residence, null, null);
+            showSuccess("Registration successful! You can now login.");
+        } catch (IllegalStateException e) {
+            showError("Registration failed. Please try again.");
+        }
         // Clear form
         usernameField.clear();
         fullNameField.clear();

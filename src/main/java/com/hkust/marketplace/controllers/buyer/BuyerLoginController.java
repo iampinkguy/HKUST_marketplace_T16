@@ -4,7 +4,6 @@ import com.hkust.marketplace.models.User;
 import com.hkust.marketplace.models.UserRole;
 import com.hkust.marketplace.utils.DataService;
 import com.hkust.marketplace.utils.DatabaseManager;
-import com.hkust.marketplace.utils.DummyDataService;
 import com.hkust.marketplace.utils.SceneManager;
 import com.hkust.marketplace.utils.SessionManager;
 import javafx.fxml.FXML;
@@ -31,8 +30,17 @@ public class BuyerLoginController {
             return;
         }
 
-        User user = DummyDataService.getInstance().findUser(username);
-        if (user == null) {
+        if (!DatabaseManager.usernameExists(username)) {
+            showError("User not found. Please check your username.");
+            return;
+        }
+
+        User user;
+        try {
+            user = DataService.toUser(
+                DatabaseManager.fetchRow("users", "username", username)
+            );
+        } catch (Exception e) {
             showError("User not found. Please check your username.");
             return;
         }
@@ -41,8 +49,7 @@ public class BuyerLoginController {
             return;
         }
         
-        String passwordHash = DataService.hashPassword(password);
-        if (!user.getPasswordHash().equals(passwordHash)) {
+        if (!DataService.checkPassword(password, user.getPasswordHash())) {
             showError("Incorrect password. Please try again.");
             return;
         }
