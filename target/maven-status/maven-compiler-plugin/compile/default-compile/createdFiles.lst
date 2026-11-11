@@ -14,7 +14,6 @@ com\hkust\marketplace\models\ListingStatus.class
 com\hkust\marketplace\utils\DatabaseManager.class
 com\hkust\marketplace\utils\SessionManager.class
 com\hkust\marketplace\utils\DataService.class
-com\hkust\marketplace\controllers\buyer\BuyerDashboardController$1.class
 com\hkust\marketplace\controllers\seller\SellerLoginController.class
 com\hkust\marketplace\models\ListingType.class
 com\hkust\marketplace\models\Notification.class
