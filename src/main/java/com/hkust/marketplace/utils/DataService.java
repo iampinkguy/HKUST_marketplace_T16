@@ -17,12 +17,6 @@ import java.util.Map;
 
 import org.mindrot.jbcrypt.BCrypt;
 
-import com.hkust.marketplace.models.Listing;
-import com.hkust.marketplace.models.ListingStatus;
-import com.hkust.marketplace.models.ListingType;
-import com.hkust.marketplace.models.User;
-import com.hkust.marketplace.models.UserRole;
-
 public class DataService {
 
     public static final List<String> HKUST_LOCATIONS = List.of(
@@ -235,7 +229,7 @@ public class DataService {
     }
 
     /** Maps database fields to the existing model, including separate submission/publication dates. */
-    private static Listing toListing(Map<String, Object> row) {
+    public static Listing toListing(Map<String, Object> row) {
         Listing listing = new Listing();
         listing.setId(row.get("listing_id").toString());
         listing.setTitle((String) row.get("item_name"));
@@ -278,6 +272,18 @@ public class DataService {
         }
         listing.setPhotoPaths(photos);
         return listing;
+    }
+
+    public static Notification toNotification(Map<String, Object> row) {
+        Notification notification = new Notification(
+                (String) row.get("username"),
+                (String) row.get("title"),
+                (String) row.get("message"),
+                (String) row.get("category"));
+        notification.setId(row.get("notification_id").toString());
+        notification.setTimestamp(parseDate((String) row.get("timestamp")));
+        notification.setRead(((Number) row.get("is_read")).intValue() != 0);
+        return notification;
     }
 
     private static LocalDateTime parseDate(String value) {

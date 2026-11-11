@@ -98,8 +98,8 @@ public class BuyerDashboardController {
                     || listing.getItemName().toLowerCase().contains(query)
                     || listing.getDescription() != null
                     && listing.getDescription().toLowerCase().contains(query)
-                    || listing.getSeller() != null
-                    && listing.getSeller().getFullName().toLowerCase().contains(query)) {
+                    || listing.getSellerFullName() != null
+                    && listing.getSellerFullName().toLowerCase().contains(query)) {
                 grid.getChildren().add(createListingCard(listing));
             }
         }
@@ -131,8 +131,8 @@ public class BuyerDashboardController {
         Label title = new Label(listing.getItemName());
         title.setWrapText(true);
         title.setStyle("-fx-font-weight: bold; -fx-font-size: 15px; -fx-text-fill: #1a1a2e;");
-        String sellerName = listing.getSeller() == null ? "Unknown seller"
-                : listing.getSeller().getFullName();
+        String sellerName = listing.getSellerFullName() == null ? "Unknown seller"
+                : listing.getSellerFullName();
         Label details = new Label(listing.getCategory() + " · " + listing.getCondition()
                 + "\nSeller: " + sellerName + "\nMeetup: " + listing.getMeetupLocation()
                 + "\nPosted: " + listing.getPostedAt().format(DATE_FORMAT));
@@ -180,7 +180,7 @@ public class BuyerDashboardController {
                 if (price < 0) throw new NumberFormatException();
                 DatabaseManager.createOffer(currentUser().getUsername(),
                         Integer.parseInt(listing.getId()), price, "offer");
-                DatabaseManager.createNotification(listing.getSeller().getUsername(),
+                DatabaseManager.createNotification(listing.getSellerUsername(),
                         currentUser().getUsername(), "New offer received",
                         currentUser().getFullName() + " offered HK$" + price
                                 + " for " + listing.getItemName(), "Offer");
@@ -221,7 +221,7 @@ public class BuyerDashboardController {
     }
 
     private void notifySeller(Listing listing, String title, String message) {
-        DatabaseManager.createNotification(listing.getSeller().getUsername(),
+        DatabaseManager.createNotification(listing.getSellerUsername(),
                 currentUser().getUsername(), title, message, "Deal");
     }
 
@@ -300,7 +300,7 @@ public class BuyerDashboardController {
         root.setPadding(new Insets(4));
         List<Notification> notifications = DatabaseManager.fetchNotifications(currentUser().getUsername());
         for (Notification notification : notifications) {
-            Label title = new Label(notification.getItemName());
+            Label title = new Label(notification.getTitle());
             title.setStyle("-fx-font-weight: bold;");
             Label message = new Label(notification.getMessage());
             message.setWrapText(true);

@@ -2,7 +2,7 @@ package com.hkust.marketplace.controllers.seller;
 
 import com.hkust.marketplace.models.User;
 import com.hkust.marketplace.models.UserRole;
-import com.hkust.marketplace.utils.DummyDataService;
+import com.hkust.marketplace.utils.DataService;
 import com.hkust.marketplace.utils.SceneManager;
 import com.hkust.marketplace.utils.SessionManager;
 import javafx.fxml.FXML;
@@ -27,23 +27,19 @@ public class SellerLoginController {
             showError("Please enter both username and password.");
             return;
         }
-        User user = DummyDataService.getInstance().findUser(username);
+        User user;
+        try {
+            user = DataService.authenticate(username, password, UserRole.SELLER);
+        } catch (IllegalStateException e) {
+            showError("Could not access the database. Please try again.");
+            return;
+        }
         if (user == null) {
-            showError("User not found.");
+            showError("Invalid seller credentials.");
             return;
         }
-        if (user.getRole() != UserRole.SELLER) {
-            showError("This account is not a Seller account. Use the correct portal.");
-            return;
-        }
-        if (!user.getPasswordHash().equals(password)) {
-            showError("Incorrect password.");
-            return;
-        }
-        if (!user.isActive()) {
-            showError("Account deactivated.");
-            return;
-        }
+
+        passwordField.clear();
         SessionManager.login(user);
         SceneManager.showSellerDashboard();
     }

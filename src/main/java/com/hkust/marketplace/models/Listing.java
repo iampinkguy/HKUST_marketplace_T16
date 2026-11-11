@@ -20,6 +20,7 @@ public class Listing {
     private Integer lendingDays;       // Only for LEND
     private String meetupLocation;
     private String sellerUsername;
+    private String sellerFullName;
     private LocalDateTime postedAt;
     // private LocalDateTime reviewedAt;  // fetch from `feedback` table
     // private String rejectionReason;   // fetch from `feedback` table
@@ -45,6 +46,9 @@ public class Listing {
 
     public String getItemName() { return itemName; }
     public void setItemName(String itemName) { this.itemName = itemName; }
+
+    public String getTitle() { return itemName; }
+    public void setTitle(String title) { this.itemName = title; }
 
     public String getDescription() { return description; }
     public void setDescription(String description) { this.description = description; }
@@ -73,6 +77,12 @@ public class Listing {
     public String getSeller() { return sellerUsername; }
     public void setSeller(String sellerUsername) { this.sellerUsername = sellerUsername; }
 
+    public String getSellerUsername() { return sellerUsername; }
+    public void setSellerUsername(String sellerUsername) { this.sellerUsername = sellerUsername; }
+
+    public String getSellerFullName() { return sellerFullName; }
+    public void setSellerFullName(String sellerFullName) { this.sellerFullName = sellerFullName; }
+
     public LocalDateTime getPostedAt() { return postedAt; }
     public void setPostedAt(LocalDateTime postedAt) { this.postedAt = postedAt; }
 
@@ -88,6 +98,9 @@ public class Listing {
     public LocalDateTime getReviewedAt() { return reviewedAt; }
     public void setReviewedAt(LocalDateTime reviewedAt) { this.reviewedAt = reviewedAt; }
 
+    public String getRejectionReason() { return rejectionReason; }
+    public void setRejectionReason(String rejectionReason) { this.rejectionReason = rejectionReason; }
+
     public boolean isApproved() { return isApproved; }
     public void setIsApproved(boolean isApproved) { this.isApproved = isApproved; }
 
@@ -95,6 +108,13 @@ public class Listing {
     public void setViewCount(int viewCount) { this.viewCount = viewCount; }
 
     public List<String> getPhotoPaths() { return photoPaths; }
+    public void setPhotoPaths(List<String> photoPaths) {
+        if (photoPaths.size() > 6) {
+            throw new IllegalArgumentException("A listing cannot have more than 6 photos.");
+        }
+        this.photoPaths = new ArrayList<>(photoPaths);
+    }
+
     public void addPhotoPath(String photoPath) {
         if (photoPaths.size() < 6) {
             photoPaths.add(photoPath);
