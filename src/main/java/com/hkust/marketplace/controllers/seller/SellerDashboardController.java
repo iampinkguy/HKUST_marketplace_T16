@@ -333,27 +333,53 @@ public class SellerDashboardController {
         VBox root = new VBox(12);
         root.setPadding(new Insets(4));
         User user = SessionManager.getCurrentUser();
-        List<Notification> notifs = DummyDataService.getInstance()
-                .getNotificationsFor(user != null ? user.getUsername() : "");
+        if (user == null) {
+            showProfileError("Could not load notifications because you are not logged in.");
+            return;
+        }
+
+        List<Notification> notifs = DatabaseManager.fetchNotifications(user.getUsername());
         if (notifs.isEmpty()) {
-            root.getChildren().add(new Label("No notifications."));
+            root.getChildren().add(new Label("No notifications found."));
         } else {
             for (Notification n : notifs) {
                 VBox item = new VBox(4);
                 item.getStyleClass().add("notif-item");
                 Label t = new Label(n.getTitle());
                 t.setStyle("-fx-font-weight: bold;");
-                Label m = new Label(n.getMessage());
-                m.setWrapText(true);
-                m.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 13px;");
+                Label status = new Label(n.isRead() ? "Read" : "Unread");
+                status.setStyle(n.isRead()
+                        ? "-fx-text-fill: #9aa0b0; -fx-font-size: 11px;"
+                        : "-fx-text-fill: #A68137; -fx-font-size: 11px; -fx-font-weight: bold;");
                 Label meta = new Label(n.getCategory() + " · " +
                         n.getTimestamp().format(DateTimeFormatter.ofPattern("dd MMM HH:mm")));
                 meta.setStyle("-fx-text-fill: #9aa0b0; -fx-font-size: 11px;");
-                item.getChildren().addAll(t, m, meta);
+                Button view = new Button("View details");
+                view.getStyleClass().addAll("btn-outline", "btn-sm");
+                view.setOnAction(e -> viewNotification(user, n));
+                item.getChildren().addAll(t, status, meta, view);
                 root.getChildren().add(item);
             }
         }
         contentPane.getChildren().add(new ScrollPane(root));
+    }
+
+    private void viewNotification(User user, Notification notification) {
+        Alert details = new Alert(Alert.AlertType.INFORMATION, notification.getMessage(), ButtonType.CLOSE);
+        details.setTitle("Notification Details");
+        details.setHeaderText(notification.getTitle() + " · " + notification.getCategory()
+                + " · " + notification.getTimestamp().format(DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm")));
+        details.showAndWait();
+
+        if (notification.isRead()) return;
+        try {
+            DatabaseManager.markNotificationRead(user.getUsername(), notification.getId());
+        } catch (IllegalStateException e) {
+            showProfileError("Could not mark notification as read: " + e.getMessage());
+            return;
+        }
+        notification.setRead(true);
+        showNotifications();
     }
 
     @FXML
