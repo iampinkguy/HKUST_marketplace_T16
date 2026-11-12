@@ -1,5 +1,6 @@
 package com.hkust.marketplace.utils;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.*;
@@ -9,7 +10,15 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParseException;
+import com.google.gson.JsonParser;
+import com.hkust.marketplace.models.ChatHistory;
 import com.hkust.marketplace.models.Listing;
+import com.hkust.marketplace.models.Message;
 import com.hkust.marketplace.models.Notification;
 import com.hkust.marketplace.models.User;
 import com.hkust.marketplace.models.UserRole;
@@ -18,6 +27,8 @@ public class DatabaseManager {
 
     private static final String URL = "jdbc:sqlite:data.db";
     private static final Path UPLOADS_DIR = Path.of("uploads").toAbsolutePath().normalize();
+    private static final Path CHAT_HISTORY_FILE = Path.of("chat_history.json");
+    private static final Gson JSON = new GsonBuilder().setPrettyPrinting().create();
     private static final String PHOTO_EXTENSION = ".jpg"; // Assuming all photos are JPEGs; adjust as needed
 
     public static Connection connect() throws SQLException {
@@ -870,6 +881,100 @@ public class DatabaseManager {
             return rows;
         } catch (SQLException e) {
             throw new IllegalStateException("Could not execute database query", e);
+        }
+    }
+
+    public static ChatHistory fetchChatHistoryOf(String listingId) {
+    if (listingId == null || listingId.isBlank()) {
+        throw new IllegalArgumentException("Listing ID must not be blank");
+    }
+
+    if (!Files.exists(CHAT_HISTORY_FILE)) {
+        return null;
+    }
+
+    try {
+        JsonObject history = JsonParser.parseString(
+                Files.readString(CHAT_HISTORY_FILE, StandardCharsets.UTF_8)
+        ).getAsJsonObject();
+
+        if (!history.has(listingId)) {
+            return null;
+        }
+
+        JsonObject listingHistory = history.getAsJsonObject(listingId);
+        List<Message> messages = new ArrayList<>();
+
+        for (var element : listingHistory.getAsJsonArray("messages")) {
+            JsonObject messageJson = element.getAsJsonObject();
+
+            Message message = new Message();
+            message.setTimestamp(
+                    LocalDateTime.parse(messageJson.get("timestamp").getAsString()));
+            message.setSender_id(messageJson.get("user").getAsString());
+            message.setSender_role(messageJson.get("role").getAsString());
+            message.setContent(messageJson.get("content").getAsString());
+            messages.add(message);
+        }
+
+        return new ChatHistory(
+                listingId,
+                messages,
+                listingHistory.get("seen_buyer").getAsBoolean(),
+                listingHistory.get("seen_seller").getAsBoolean()
+        );
+    } catch (IOException | JsonParseException | IllegalStateException e) {
+        throw new IllegalStateException("Could not read chat history", e);
+    }
+}
+
+    public static void appendMessageToChatHistory(String listingId, Message message) {
+        if (listingId == null || listingId.isBlank()) {
+            throw new IllegalArgumentException("Listing ID must not be blank");
+        }
+        if (message == null) {
+            throw new IllegalArgumentException("Message must not be null");
+        }
+
+        JsonObject history;
+        try {
+            if (Files.exists(CHAT_HISTORY_FILE)) {
+                history = JsonParser.parseString(
+                        Files.readString(CHAT_HISTORY_FILE, StandardCharsets.UTF_8)).getAsJsonObject();
+            } else {
+                history = new JsonObject();
+            }
+        } catch (IOException | JsonParseException | IllegalStateException e) {
+            throw new IllegalStateException("Could not read chat history", e);
+        }
+
+        JsonObject listingHistory = history.has(listingId)
+                ? history.getAsJsonObject(listingId)
+                : new JsonObject();
+        JsonArray messages = listingHistory.has("messages")
+                ? listingHistory.getAsJsonArray("messages")
+                : new JsonArray();
+
+        JsonObject messageJson = new JsonObject();
+        messageJson.addProperty("timestamp", message.getTimestamp().toString());
+        messageJson.addProperty("user", message.getSender_id());
+        messageJson.addProperty("role", message.getSender_role());
+        messageJson.addProperty("content", message.getContent());
+        messages.add(messageJson);
+
+        listingHistory.add("messages", messages);
+        if (!listingHistory.has("seen_buyer")) {
+            listingHistory.addProperty("seen_buyer", false);
+        }
+        if (!listingHistory.has("seen_seller")) {
+            listingHistory.addProperty("seen_seller", false);
+        }
+        history.add(listingId, listingHistory);
+
+        try {
+            Files.writeString(CHAT_HISTORY_FILE, JSON.toJson(history), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new IllegalStateException("Could not write chat history", e);
         }
     }
 }
