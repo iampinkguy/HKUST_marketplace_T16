@@ -232,8 +232,8 @@ public class BuyerDashboardController {
                     new Message(user.getUsername(), user.getRole().name().toLowerCase(), content));
             DatabaseManager.markChatHistorySeen(listing.getId(), "buyer");
             DatabaseManager.createNotification(
-                    user.getUsername(),
                     sellerUsername,
+                    user.getUsername(),
                     "New chat message",
                     user.getFullName() + " sent you a message about " + listing.getTitle(),
                     "Chat");

@@ -35,27 +35,6 @@ public class DatabaseManager {
         return DriverManager.getConnection(System.getProperty("marketplace.database.url", URL));
     }
 
-    private static void migrateNotificationSchema() {
-        addNotificationColumnIfMissing("sender", "TEXT");
-        addNotificationColumnIfMissing("receiver", "TEXT");
-        addNotificationColumnIfMissing("is_read", "INTEGER NOT NULL DEFAULT 0");
-    }
-
-    private static void addNotificationColumnIfMissing(String column, String definition) {
-        try (Connection connection = connect();
-             PreparedStatement statement = connection.prepareStatement("PRAGMA table_info(notifications)");
-             ResultSet result = statement.executeQuery()) {
-            while (result.next()) {
-                if (column.equalsIgnoreCase(result.getString("name"))) {
-                    return;
-                }
-            }
-        } catch (SQLException e) {
-            throw new IllegalStateException("Could not inspect notifications schema", e);
-        }
-        runSql("ALTER TABLE notifications ADD COLUMN " + column + " " + definition);
-    }
-
     private static void runSql(String sql) {
         try (Connection connection = connect(); Statement statement = connection.createStatement()) {
             statement.executeUpdate(sql);
@@ -153,18 +132,16 @@ public class DatabaseManager {
 
         runSql("""
                 CREATE TABLE IF NOT EXISTS notifications (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username STRING NOT NULL,
-                sender STRING NOT NULL,
-                title STRING NOT NULL,
-                message STRING NOT NULL,
-                category STRING NOT NULL,
+                notification_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                sender TEXT,
+                title TEXT NOT NULL,
+                message TEXT NOT NULL,
+                category TEXT NOT NULL,
                 timestamp TEXT NOT NULL,
-                read INTEGER NOT NULL DEFAULT 0
+                is_read INTEGER NOT NULL DEFAULT 0
             )
             """);
-        migrateNotificationSchema();
-
         runSql("""
                 CREATE TABLE IF NOT EXISTS favourites (
                 buyer_username TEXT NOT NULL REFERENCES users(username),
@@ -172,6 +149,7 @@ public class DatabaseManager {
                 PRIMARY KEY (buyer_username, listing_id)
             )
             """);
+        migrateNotificationSchema();
     }
 
     private static void migrateListingSchema() {
@@ -196,18 +174,57 @@ public class DatabaseManager {
         }
         runSql("ALTER TABLE listings ADD COLUMN " + column + " " + definition);
         migrateListingReviewSchema();
+    }
 
-        runSql("""
-            CREATE TABLE IF NOT EXISTS notifications (
-                notification_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT NOT NULL,
-                title TEXT NOT NULL,
-                message TEXT NOT NULL,
-                category TEXT NOT NULL,
-                timestamp TEXT NOT NULL,
-                is_read INTEGER NOT NULL DEFAULT 0
-            )
-            """);
+    private static void migrateNotificationSchema() {
+        try (Connection connection = connect()) {
+            List<String> columns = new ArrayList<>();
+            try (Statement statement = connection.createStatement();
+                 ResultSet result = statement.executeQuery("PRAGMA table_info(notifications)")) {
+                while (result.next()) columns.add(result.getString("name"));
+            }
+
+            if (columns.contains("notification_id") && columns.contains("is_read")) {
+                if (!columns.contains("sender")) {
+                    try (Statement statement = connection.createStatement()) {
+                        statement.executeUpdate("ALTER TABLE notifications ADD COLUMN sender TEXT");
+                    }
+                }
+                return;
+            }
+
+            String idColumn = columns.contains("notification_id") ? "notification_id" : "id";
+            String readColumn = columns.contains("is_read") ? "is_read" : "read";
+            String senderColumn = columns.contains("sender") ? "sender" : "NULL";
+            connection.setAutoCommit(false);
+            try (Statement statement = connection.createStatement()) {
+                statement.executeUpdate("""
+                        CREATE TABLE notifications_migration (
+                            notification_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            username TEXT NOT NULL,
+                            sender TEXT,
+                            title TEXT NOT NULL,
+                            message TEXT NOT NULL,
+                            category TEXT NOT NULL,
+                            timestamp TEXT NOT NULL,
+                            is_read INTEGER NOT NULL DEFAULT 0
+                        )
+                        """);
+                statement.executeUpdate("INSERT INTO notifications_migration "
+                        + "(notification_id, username, sender, title, message, category, timestamp, is_read) "
+                        + "SELECT " + idColumn + ", username, " + senderColumn
+                        + ", title, message, category, timestamp, " + readColumn
+                        + " FROM notifications");
+                statement.executeUpdate("DROP TABLE notifications");
+                statement.executeUpdate("ALTER TABLE notifications_migration RENAME TO notifications");
+                connection.commit();
+            } catch (SQLException | RuntimeException e) {
+                connection.rollback();
+                throw e;
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not migrate notifications", e);
+        }
     }
 
     /** Upgrades old databases in one transaction, preserving listing IDs and schema objects. */
@@ -644,22 +661,22 @@ public class DatabaseManager {
         }
     }
 
-    public static void createNotification(String sender, String receiver, String title, String message, String category) {
+    public static void createNotification(String username, String sender, String title,
+                                          String message, String category) {
         String sql = """
-        INSERT INTO notifications (username, sender, receiver, title, message, category, timestamp, is_read)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+        INSERT INTO notifications (username, sender, title, message, category, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?)
     """;
 
         try (Connection connection = connect();
              PreparedStatement stmt = connection.prepareStatement(sql)) {
 
-            stmt.setString(1, receiver);
+            stmt.setString(1, username);
             stmt.setString(2, sender);
-            stmt.setString(3, receiver);
-            stmt.setString(4, title);
-            stmt.setString(5, message);
-            stmt.setString(6, category);
-            stmt.setString(7, LocalDateTime.now().toString());
+            stmt.setString(3, title);
+            stmt.setString(4, message);
+            stmt.setString(5, category);
+            stmt.setString(6, LocalDateTime.now().toString());
 
             stmt.executeUpdate();
         } catch (SQLException e) {
@@ -878,7 +895,11 @@ public class DatabaseManager {
     }
 
     public static List<Notification> fetchNotifications(String username) {
-        List<Map<String, Object>> rows = fetchRows("notifications", Map.of("username", username));
+        List<Map<String, Object>> rows = fetchQuery("""
+                SELECT * FROM notifications
+                WHERE username = ?
+                ORDER BY timestamp DESC, notification_id DESC
+                """, username);
         List<Notification> notifications = new ArrayList<>();
 
         for (Map<String, Object> row : rows) {
@@ -886,6 +907,23 @@ public class DatabaseManager {
         }
 
         return notifications;
+    }
+
+    public static void markNotificationRead(String username, String notificationId) {
+        String sql = """
+                UPDATE notifications SET is_read = 1
+                WHERE username = ? AND notification_id = ?
+                """;
+        try (Connection connection = connect();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, username);
+            statement.setLong(2, Long.parseLong(notificationId));
+            if (statement.executeUpdate() != 1) {
+                throw new IllegalStateException("Notification was not found for this account.");
+            }
+        } catch (SQLException | NumberFormatException e) {
+            throw new IllegalStateException("Could not mark notification as read", e);
+        }
     }
 
     private static List<Map<String, Object>> fetchQuery(String sql, Object... parameters) {

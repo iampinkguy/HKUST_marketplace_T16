@@ -1,6 +1,8 @@
 package com.hkust.marketplace.controllers.seller;
 
 import com.hkust.marketplace.models.*;
+import com.hkust.marketplace.utils.DataService;
+import com.hkust.marketplace.utils.DatabaseManager;
 import com.hkust.marketplace.utils.DummyDataService;
 import com.hkust.marketplace.utils.SceneManager;
 import com.hkust.marketplace.utils.SessionManager;
@@ -331,27 +333,53 @@ public class SellerDashboardController {
         VBox root = new VBox(12);
         root.setPadding(new Insets(4));
         User user = SessionManager.getCurrentUser();
-        List<Notification> notifs = DummyDataService.getInstance()
-                .getNotificationsFor(user != null ? user.getUsername() : "");
+        if (user == null) {
+            showProfileError("Could not load notifications because you are not logged in.");
+            return;
+        }
+
+        List<Notification> notifs = DatabaseManager.fetchNotifications(user.getUsername());
         if (notifs.isEmpty()) {
-            root.getChildren().add(new Label("No notifications."));
+            root.getChildren().add(new Label("No notifications found."));
         } else {
             for (Notification n : notifs) {
                 VBox item = new VBox(4);
                 item.getStyleClass().add("notif-item");
                 Label t = new Label(n.getTitle());
                 t.setStyle("-fx-font-weight: bold;");
-                Label m = new Label(n.getMessage());
-                m.setWrapText(true);
-                m.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 13px;");
+                Label status = new Label(n.isRead() ? "Read" : "Unread");
+                status.setStyle(n.isRead()
+                        ? "-fx-text-fill: #9aa0b0; -fx-font-size: 11px;"
+                        : "-fx-text-fill: #A68137; -fx-font-size: 11px; -fx-font-weight: bold;");
                 Label meta = new Label(n.getCategory() + " · " +
                         n.getTimestamp().format(DateTimeFormatter.ofPattern("dd MMM HH:mm")));
                 meta.setStyle("-fx-text-fill: #9aa0b0; -fx-font-size: 11px;");
-                item.getChildren().addAll(t, m, meta);
+                Button view = new Button("View details");
+                view.getStyleClass().addAll("btn-outline", "btn-sm");
+                view.setOnAction(e -> viewNotification(user, n));
+                item.getChildren().addAll(t, status, meta, view);
                 root.getChildren().add(item);
             }
         }
         contentPane.getChildren().add(new ScrollPane(root));
+    }
+
+    private void viewNotification(User user, Notification notification) {
+        Alert details = new Alert(Alert.AlertType.INFORMATION, notification.getMessage(), ButtonType.CLOSE);
+        details.setTitle("Notification Details");
+        details.setHeaderText(notification.getTitle() + " · " + notification.getCategory()
+                + " · " + notification.getTimestamp().format(DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm")));
+        details.showAndWait();
+
+        if (notification.isRead()) return;
+        try {
+            DatabaseManager.markNotificationRead(user.getUsername(), notification.getId());
+        } catch (IllegalStateException e) {
+            showProfileError("Could not mark notification as read: " + e.getMessage());
+            return;
+        }
+        notification.setRead(true);
+        showNotifications();
     }
 
     @FXML
@@ -368,6 +396,8 @@ public class SellerDashboardController {
         TextField name = new TextField(user != null ? user.getFullName() : "");
         PasswordField pass = new PasswordField();
         pass.setPromptText("New password (optional)");
+        PasswordField confirmation = new PasswordField();
+        confirmation.setPromptText("Confirm new password");
         TextArea bio = new TextArea(user != null && user.getBio() != null ? user.getBio() : "");
         bio.setPrefRowCount(3);
         ComboBox<String> meetup = new ComboBox<>(FXCollections.observableArrayList(DummyDataService.HKUST_LOCATIONS));
@@ -376,15 +406,70 @@ public class SellerDashboardController {
 
         Button save = new Button("Save Changes");
         save.getStyleClass().add("btn-gold");
-        save.setOnAction(e -> new Alert(Alert.AlertType.INFORMATION, "Profile saved (demo).").showAndWait());
+        save.setOnAction(e -> saveProfile(user, name, pass, confirmation, bio, meetup));
+        Button cancel = new Button("Cancel");
+        cancel.getStyleClass().add("btn-outline");
+        cancel.setOnAction(e -> showProfile());
 
         form.getChildren().addAll(
                 new Label("Full Name"), name,
                 new Label("New Password"), pass,
+                new Label("Confirm New Password"), confirmation,
                 new Label("Bio"), bio,
                 new Label("Preferred Meet-up"), meetup,
-                save);
+                new HBox(8, save, cancel));
         contentPane.getChildren().add(form);
+    }
+
+    private void saveProfile(User user, TextField name, PasswordField password,
+                             PasswordField confirmation, TextArea bio, ComboBox<String> meetup) {
+        if (user == null) {
+            showProfileError("Could not save your profile because you are not logged in.");
+            return;
+        }
+
+        String fullName = name.getText().trim();
+        if (fullName.isEmpty()) {
+            showProfileError("Full name cannot be empty.");
+            return;
+        }
+
+        String passwordHash = null;
+        String newPassword = password.getText();
+        if (!newPassword.isEmpty()) {
+            if (!newPassword.equals(confirmation.getText())) {
+                showProfileError("Passwords do not match.");
+                return;
+            }
+            String passwordCheck = DataService.checkPasswordStrength(newPassword);
+            if (!"OK".equals(passwordCheck)) {
+                showProfileError(passwordCheck);
+                return;
+            }
+            passwordHash = DataService.hashPassword(newPassword);
+        }
+
+        String updatedBio = bio.getText() == null || bio.getText().isBlank()
+                ? null : bio.getText().trim();
+        String updatedMeetup = meetup.getValue();
+        try {
+            DatabaseManager.updateUserProfile(user.getUsername(), fullName, user.getResidenceHall(),
+                    updatedBio, updatedMeetup, passwordHash);
+        } catch (IllegalStateException e) {
+            showProfileError("Could not save your profile: " + e.getMessage());
+            return;
+        }
+
+        user.setFullName(fullName);
+        user.setBio(updatedBio);
+        user.setPreferredMeetup(updatedMeetup);
+        if (passwordHash != null) user.setPasswordHash(passwordHash);
+        welcomeLabel.setText("Hello, " + fullName);
+        new Alert(Alert.AlertType.INFORMATION, "Profile updated successfully.").showAndWait();
+    }
+
+    private void showProfileError(String message) {
+        new Alert(Alert.AlertType.ERROR, message).showAndWait();
     }
 
     @FXML
