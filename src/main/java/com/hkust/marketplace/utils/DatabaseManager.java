@@ -35,6 +35,27 @@ public class DatabaseManager {
         return DriverManager.getConnection(System.getProperty("marketplace.database.url", URL));
     }
 
+    private static void migrateNotificationSchema() {
+        addNotificationColumnIfMissing("sender", "TEXT");
+        addNotificationColumnIfMissing("receiver", "TEXT");
+        addNotificationColumnIfMissing("is_read", "INTEGER NOT NULL DEFAULT 0");
+    }
+
+    private static void addNotificationColumnIfMissing(String column, String definition) {
+        try (Connection connection = connect();
+             PreparedStatement statement = connection.prepareStatement("PRAGMA table_info(notifications)");
+             ResultSet result = statement.executeQuery()) {
+            while (result.next()) {
+                if (column.equalsIgnoreCase(result.getString("name"))) {
+                    return;
+                }
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not inspect notifications schema", e);
+        }
+        runSql("ALTER TABLE notifications ADD COLUMN " + column + " " + definition);
+    }
+
     private static void runSql(String sql) {
         try (Connection connection = connect(); Statement statement = connection.createStatement()) {
             statement.executeUpdate(sql);
@@ -59,7 +80,6 @@ public class DatabaseManager {
                 rating_count INTEGER NOT NULL DEFAULT 0
             )
             """);
-
         runSql("""
                 CREATE TABLE IF NOT EXISTS listings (
                 listing_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -93,8 +113,8 @@ public class DatabaseManager {
                     'UG Hall 1', 'UG Hall 2', 'North Gate', 'South Gate',
                     'Shaw Auditorium', 'Coffee Shop (LG5)', 'Sports Hall'
                 )),
-                posted_at DATE NOT NULL,
-                availability_status TEXT NOT NULL,
+                posted_date DATE NOT NULL,
+                availability_status TEXT NOT NULL CHECK(availability_status IN ('Available', 'Unavailable')),
                 views INTEGER NOT NULL DEFAULT 0,
                 approved INTEGER NOT NULL DEFAULT -1
             )
@@ -143,6 +163,7 @@ public class DatabaseManager {
                 read INTEGER NOT NULL DEFAULT 0
             )
             """);
+        migrateNotificationSchema();
 
         runSql("""
                 CREATE TABLE IF NOT EXISTS favourites (
@@ -561,13 +582,13 @@ public class DatabaseManager {
     public static List<Map<String, Object>> fetchBuyerOffers(String buyerUsername) {
         String sql = """
             SELECT o.buyer_username, o.listing_id, o.price, o.chatbox_id,
-                   l.item_name, l.listing_type, l.listing_status, l.posted_at,
+                   l.item_name, l.listing_type, l.listing_status, l.posted_date,
                    l.seller, u.full_name AS seller_name
             FROM offers o
             JOIN listings l ON l.listing_id = o.listing_id
             JOIN users u ON u.username = l.seller
             WHERE o.buyer_username = ?
-            ORDER BY l.posted_at DESC
+            ORDER BY l.posted_date DESC
             """;
         return fetchQuery(sql, buyerUsername);
     }
@@ -577,7 +598,7 @@ public class DatabaseManager {
             SELECT l.* FROM listings l
             JOIN favourites f ON f.listing_id = l.listing_id
             WHERE f.buyer_username = ?
-            ORDER BY l.posted_at DESC
+            ORDER BY l.posted_date DESC
             """;
         List<Listing> listings = new ArrayList<>();
         for (Map<String, Object> row : fetchQuery(sql, buyerUsername)) {
@@ -623,21 +644,22 @@ public class DatabaseManager {
         }
     }
 
-    public static void createNotification(String username, String sender, String title, String message, String category) {
+    public static void createNotification(String sender, String receiver, String title, String message, String category) {
         String sql = """
-        INSERT INTO notifications (username, sender, title, message, category, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO notifications (username, sender, receiver, title, message, category, timestamp, is_read)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0)
     """;
 
         try (Connection connection = connect();
              PreparedStatement stmt = connection.prepareStatement(sql)) {
 
-            stmt.setString(1, username);
+            stmt.setString(1, receiver);
             stmt.setString(2, sender);
-            stmt.setString(3, title);
-            stmt.setString(4, message);
-            stmt.setString(5, category);
-            stmt.setString(6, LocalDateTime.now().toString());
+            stmt.setString(3, receiver);
+            stmt.setString(4, title);
+            stmt.setString(5, message);
+            stmt.setString(6, category);
+            stmt.setString(7, LocalDateTime.now().toString());
 
             stmt.executeUpdate();
         } catch (SQLException e) {
@@ -975,6 +997,43 @@ public class DatabaseManager {
             Files.writeString(CHAT_HISTORY_FILE, JSON.toJson(history), StandardCharsets.UTF_8);
         } catch (IOException e) {
             throw new IllegalStateException("Could not write chat history", e);
+        }
+    }
+
+    public static void markChatHistorySeen(String listingId, String role) {
+        if (listingId == null || listingId.isBlank()) {
+            throw new IllegalArgumentException("Listing ID must not be blank");
+        }
+        if (!"buyer".equals(role) && !"seller".equals(role)) {
+            throw new IllegalArgumentException("Chat role must be buyer or seller");
+        }
+
+        JsonObject history;
+        try {
+            if (Files.exists(CHAT_HISTORY_FILE)) {
+                history = JsonParser.parseString(
+                        Files.readString(CHAT_HISTORY_FILE, StandardCharsets.UTF_8)).getAsJsonObject();
+            } else {
+                history = new JsonObject();
+            }
+
+            JsonObject listingHistory = history.has(listingId)
+                    ? history.getAsJsonObject(listingId)
+                    : new JsonObject();
+            if (!listingHistory.has("messages")) {
+                listingHistory.add("messages", new JsonArray());
+            }
+            if (!listingHistory.has("seen_buyer")) {
+                listingHistory.addProperty("seen_buyer", false);
+            }
+            if (!listingHistory.has("seen_seller")) {
+                listingHistory.addProperty("seen_seller", false);
+            }
+            listingHistory.addProperty("seen_" + role, true);
+            history.add(listingId, listingHistory);
+            Files.writeString(CHAT_HISTORY_FILE, JSON.toJson(history), StandardCharsets.UTF_8);
+        } catch (IOException | JsonParseException | IllegalStateException e) {
+            throw new IllegalStateException("Could not update chat history seen status", e);
         }
     }
 }

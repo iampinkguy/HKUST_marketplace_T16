@@ -3,6 +3,8 @@ package com.hkust.marketplace.controllers.buyer;
 import com.hkust.marketplace.models.Listing;
 import com.hkust.marketplace.models.ListingStatus;
 import com.hkust.marketplace.models.ListingType;
+import com.hkust.marketplace.models.ChatHistory;
+import com.hkust.marketplace.models.Message;
 import com.hkust.marketplace.models.Notification;
 import com.hkust.marketplace.models.User;
 import com.hkust.marketplace.utils.DataService;
@@ -15,20 +17,21 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.*;
 import javafx.scene.layout.*;
+import javafx.scene.text.Font;
+import javafx.scene.text.FontWeight;
 
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 public class BuyerDashboardController {
-    private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("dd MMM yyyy");
-    private static final DateTimeFormatter DATE_TIME_FORMAT = DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm");
 
     @FXML private StackPane contentPane;
     @FXML private Label pageTitle;
     @FXML private Label welcomeLabel;
     @FXML private Button btnBrowse, btnDeals, btnHistory, btnFavourites, btnNotifications, btnProfile;
+
     private Button currentActiveBtn;
 
     @FXML
@@ -37,81 +40,67 @@ public class BuyerDashboardController {
         if (user != null) {
             welcomeLabel.setText("Hello, " + user.getFullName());
         }
+        currentActiveBtn = btnBrowse;
         showBrowse();
     }
 
-    private void setActive(Button button, String title) {
+    private void setActive(Button btn, String title) {
         if (currentActiveBtn != null) {
             currentActiveBtn.getStyleClass().remove("sidebar-btn-active");
         }
-        button.getStyleClass().add("sidebar-btn-active");
-        currentActiveBtn = button;
+        btn.getStyleClass().add("sidebar-btn-active");
+        currentActiveBtn = btn;
         pageTitle.setText(title);
     }
 
     @FXML
     private void showBrowse() {
         setActive(btnBrowse, "Browse Marketplace");
-        renderBrowse("All Categories", "All Types", "");
-    }
-
-    private void renderBrowse(String category, String type, String search) {
         contentPane.getChildren().clear();
+
         VBox root = new VBox(16);
         root.setPadding(new Insets(4));
 
-        ComboBox<String> categoryFilter = new ComboBox<>(
-                FXCollections.observableArrayList("All Categories"));
+        // Filter bar
+        HBox filterBar = new HBox(12);
+        filterBar.setAlignment(Pos.CENTER_LEFT);
+        ComboBox<String> categoryFilter = new ComboBox<>(FXCollections.observableArrayList("All Categories"));
         categoryFilter.getItems().addAll(DataService.CATEGORIES);
-        categoryFilter.setValue(category);
-        ComboBox<String> typeFilter = new ComboBox<>(
-                FXCollections.observableArrayList("All Types", "Sell", "Lend", "Giveaway"));
-        typeFilter.setValue(type);
-        TextField searchField = new TextField(search);
+        categoryFilter.getSelectionModel().selectFirst();
+        ComboBox<String> typeFilter = new ComboBox<>(FXCollections.observableArrayList("All Types", "Sell", "Lend", "Giveaway"));
+        typeFilter.getSelectionModel().selectFirst();
+        TextField searchField = new TextField();
         searchField.setPromptText("Search listings...");
         searchField.setPrefWidth(220);
-        Button searchButton = new Button("Search");
-        searchButton.getStyleClass().addAll("btn-primary", "btn-sm");
-        searchButton.setOnAction(event -> renderBrowse(
-                categoryFilter.getValue(), typeFilter.getValue(), searchField.getText().trim()));
+        Button searchBtn = new Button("Search");
+        searchBtn.getStyleClass().addAll("btn-primary", "btn-sm");
+        filterBar.getChildren().addAll(
+                new Label("Category:"), categoryFilter,
+                new Label("Type:"), typeFilter,
+                searchField, searchBtn
+        );
+        root.getChildren().add(filterBar);
 
-        HBox filters = new HBox(12, new Label("Category:"), categoryFilter,
-                new Label("Type:"), typeFilter, searchField, searchButton);
-        filters.setAlignment(Pos.CENTER_LEFT);
-        root.getChildren().add(filters);
-
-        Map<String, Object> dbFilters = new java.util.LinkedHashMap<>();
-        dbFilters.put("listing_status", ListingStatus.LIVE.name());
-        if (!"All Categories".equals(category)) {
-            dbFilters.put("category", category);
-        }
-        if (!"All Types".equals(type)) {
-            dbFilters.put("listing_type", ListingType.valueOf(type.toUpperCase()).name());
-        }
-
-        List<Listing> listings = DatabaseManager.fetchListings(dbFilters);
-        String query = search.toLowerCase();
+        // Listing grid
         FlowPane grid = new FlowPane(16, 16);
         grid.setPrefWrapLength(900);
-        for (Listing listing : listings) {
-            if (query.isEmpty()
-                    || listing.getItemName().toLowerCase().contains(query)
-                    || listing.getDescription() != null
-                    && listing.getDescription().toLowerCase().contains(query)
-                    || listing.getSellerFullName() != null
-                    && listing.getSellerFullName().toLowerCase().contains(query)) {
-                grid.getChildren().add(createListingCard(listing));
-            }
-        }
-        if (grid.getChildren().isEmpty()) {
-            Label empty = new Label("No matching live listings.");
+
+        List<Listing> live = DataService.getLiveListings();
+
+        if (live.isEmpty()) {
+            Label empty = new Label("No live listings at the moment.");
             empty.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 15px;");
             root.getChildren().add(empty);
         } else {
+            for (Listing listing : live) {
+                grid.getChildren().add(createListingCard(listing));
+            }
             root.getChildren().add(grid);
         }
+
         ScrollPane scroll = new ScrollPane(root);
         scroll.setFitToWidth(true);
+        scroll.setStyle("-fx-background-color: transparent;");
         contentPane.getChildren().add(scroll);
     }
 
@@ -119,175 +108,312 @@ public class BuyerDashboardController {
         VBox card = new VBox(8);
         card.getStyleClass().add("listing-card");
         card.setPrefWidth(260);
-        Label type = new Label(listing.getTypeDisplay());
-        type.getStyleClass().add("badge");
-        Label price = new Label(listing.getPriceDisplay());
-        price.setStyle("-fx-font-weight: bold; -fx-text-fill: #003974; -fx-font-size: 16px;");
+        card.setMinHeight(200);
+
+        // Type badge + price
+        HBox top = new HBox();
+        top.setAlignment(Pos.CENTER_LEFT);
+        Label typeBadge = new Label(listing.getTypeDisplay());
+        typeBadge.getStyleClass().add("badge");
+        if (listing.getType() == ListingType.SELL) typeBadge.getStyleClass().add("badge-sold");
+        else if (listing.getType() == ListingType.LEND) typeBadge.getStyleClass().add("badge-pending");
+        else typeBadge.getStyleClass().add("badge-live");
+
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
-        HBox top = new HBox(type, spacer, price);
-        top.setAlignment(Pos.CENTER_LEFT);
+        Label price = new Label(listing.getPriceDisplay());
+        price.setStyle("-fx-font-weight: bold; -fx-text-fill: #003974; -fx-font-size: 16px;");
+        top.getChildren().addAll(typeBadge, spacer, price);
 
-        Label title = new Label(listing.getItemName());
-        title.setWrapText(true);
+        Label title = new Label(listing.getTitle());
         title.setStyle("-fx-font-weight: bold; -fx-font-size: 15px; -fx-text-fill: #1a1a2e;");
-        String sellerName = listing.getSellerFullName() == null ? "Unknown seller"
-                : listing.getSellerFullName();
-        Label details = new Label(listing.getCategory() + " · " + listing.getCondition()
-                + "\nSeller: " + sellerName + "\nMeetup: " + listing.getMeetupLocation()
-                + "\nPosted: " + listing.getPostedAt().format(DATE_FORMAT));
-        details.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 12px;");
-        Button action = new Button();
-        action.getStyleClass().addAll("btn-primary", "btn-sm");
-        if (listing.getType() == ListingType.SELL) {
-            action.setText("Make Offer");
-            action.setOnAction(event -> showOfferDialog(listing));
-        } else if (listing.getType() == ListingType.LEND) {
-            action.setText("Request Borrow");
-            action.setOnAction(event -> showBorrowDialog(listing));
-        } else {
-            action.setText("Claim Item");
-            action.setOnAction(event -> claimItem(listing));
+        title.setWrapText(true);
+
+        Label meta = new Label(listing.getCategory() + " · " + listing.getCondition());
+        meta.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 12px;");
+
+        Label seller = new Label("Seller: " + listing.getSellerFullName());
+        seller.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 12px;");
+
+        Label location = new Label("📍 " + listing.getMeetupLocation());
+        location.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 12px;");
+
+        String postedDate = listing.getPostedAt() == null
+                ? "Date unavailable"
+                : listing.getPostedAt().format(DateTimeFormatter.ofPattern("dd MMM yyyy"));
+        Label date = new Label("Posted: " + postedDate);
+        date.setStyle("-fx-text-fill: #9aa0b0; -fx-font-size: 11px;");
+
+        Button actionBtn = new Button();
+        actionBtn.getStyleClass().addAll("btn-primary", "btn-sm");
+        switch (listing.getType()) {
+            case SELL -> {
+                actionBtn.setText("Make Offer");
+                actionBtn.setOnAction(e -> showOfferDialog(listing));
+            }
+            case LEND -> {
+                actionBtn.setText("Request Borrow");
+                actionBtn.setOnAction(e -> showBorrowDialog(listing));
+            }
+            case GIVEAWAY -> {
+                actionBtn.setText("Claim Item");
+                actionBtn.setOnAction(e -> claimItem(listing));
+            }
         }
-        Button favourite = new Button("Favourite");
-        favourite.getStyleClass().add("btn-sm");
-        favourite.setOnAction(event -> {
-            DatabaseManager.setFavourite(currentUser().getUsername(),
-                    Integer.parseInt(listing.getId()), true);
-            showInfo("Listing added to favourites.");
-        });
-        card.getChildren().addAll(top, title, details, action, favourite);
+
+        Button chatboxBtn = new Button();
+        chatboxBtn.getStyleClass().addAll("btn-primary", "btn-sm");
+        chatboxBtn.setText("Chatbox");
+        chatboxBtn.setOnAction(e -> showChatbox(listing));
+
+        card.getChildren().addAll(top, title, meta, seller, location, date, actionBtn, chatboxBtn);
         return card;
     }
 
-    private User currentUser() {
+    private void showChatbox(Listing listing) {
         User user = SessionManager.getCurrentUser();
         if (user == null) {
-            throw new IllegalStateException("No buyer is logged in.");
+            new Alert(Alert.AlertType.ERROR, "You must be logged in to use the chatbox.").showAndWait();
+            return;
         }
-        return user;
+
+        Dialog<Void> dialog = new Dialog<>();
+        dialog.setTitle("Chatbox");
+        dialog.setHeaderText("Chat with " + listing.getSellerFullName()
+                + " about " + listing.getTitle());
+        dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+
+        ListView<Message> messageList = new ListView<>();
+        messageList.setPrefHeight(320);
+        messageList.setCellFactory(view -> new ListCell<>() {
+            @Override
+            protected void updateItem(Message message, boolean empty) {
+                super.updateItem(message, empty);
+                if (empty || message == null) {
+                    setText(null);
+                } else {
+                    String timestamp = message.getTimestamp() == null
+                            ? ""
+                            : message.getTimestamp().format(DateTimeFormatter.ofPattern("dd MMM HH:mm"));
+                    setText(message.getSender_id() + " (" + timestamp + ")\n" + message.getContent());
+                    setWrapText(true);
+                }
+            }
+        });
+
+        TextArea input = new TextArea();
+        input.setPromptText("Type a message...");
+        input.setPrefRowCount(3);
+        Button send = new Button("Send");
+        send.getStyleClass().add("btn-primary");
+
+        Runnable refreshMessages = () -> {
+            ChatHistory history = DatabaseManager.fetchChatHistoryOf(listing.getId());
+            messageList.getItems().setAll(history == null || history.getMessages() == null
+                    ? List.of()
+                    : history.getMessages());
+            if (!messageList.getItems().isEmpty()) {
+                messageList.scrollTo(messageList.getItems().size() - 1);
+            }
+        };
+
+        send.setOnAction(event -> {
+            String content = input.getText().trim();
+            if (content.isEmpty()) {
+                return;
+            }
+            String sellerUsername = listing.getSellerUsername();
+            if (sellerUsername == null || sellerUsername.isBlank()) {
+                new Alert(Alert.AlertType.ERROR,
+                        "This listing is not linked to a seller account.").showAndWait();
+                return;
+            }
+            DatabaseManager.appendMessageToChatHistory(listing.getId(),
+                    new Message(user.getUsername(), user.getRole().name().toLowerCase(), content));
+            DatabaseManager.markChatHistorySeen(listing.getId(), "buyer");
+            DatabaseManager.createNotification(
+                    user.getUsername(),
+                    sellerUsername,
+                    "New chat message",
+                    user.getFullName() + " sent you a message about " + listing.getTitle(),
+                    "Chat");
+            input.clear();
+            refreshMessages.run();
+        });
+
+        VBox content = new VBox(8, messageList, input, send);
+        content.setPrefWidth(460);
+        dialog.getDialogPane().setContent(content);
+        refreshMessages.run();
+        dialog.showAndWait();
     }
 
     private void showOfferDialog(Listing listing) {
-        TextInputDialog dialog = new TextInputDialog(
-                listing.getPrice() == null ? "" : String.valueOf(listing.getPrice()));
+        TextInputDialog dialog = new TextInputDialog(String.valueOf(listing.getPrice() != null ? listing.getPrice() : 0));
         dialog.setTitle("Make an Offer");
-        dialog.setHeaderText("Offer for: " + listing.getItemName());
+        dialog.setHeaderText("Offer for: " + listing.getTitle());
         dialog.setContentText("Your offer price (HK$):");
-        dialog.showAndWait().ifPresent(value -> {
+        dialog.showAndWait().ifPresent(priceStr -> {
             try {
-                double price = Double.parseDouble(value.trim());
-                if (price < 0) throw new NumberFormatException();
-                DatabaseManager.createOffer(currentUser().getUsername(),
-                        Integer.parseInt(listing.getId()), price, "offer");
-                DatabaseManager.createNotification(listing.getSellerUsername(),
-                        currentUser().getUsername(), "New offer received",
-                        currentUser().getFullName() + " offered HK$" + price
-                                + " for " + listing.getItemName(), "Offer");
-                showInfo("Offer submitted successfully.");
-            } catch (NumberFormatException exception) {
-                showError("Please enter a valid non-negative price.");
+                double price = Double.parseDouble(priceStr);
+                Alert alert = new Alert(Alert.AlertType.INFORMATION);
+                alert.setTitle("Offer Submitted");
+                alert.setHeaderText(null);
+                alert.setContentText("Your offer of HK$" + price + " has been sent to " + listing.getSellerFullName() + ".\n\n(Demo only – no backend)");
+                alert.showAndWait();
+            } catch (NumberFormatException ex) {
+                new Alert(Alert.AlertType.ERROR, "Invalid price.").showAndWait();
             }
         });
     }
 
     private void showBorrowDialog(Listing listing) {
-        Alert dialog = new Alert(Alert.AlertType.CONFIRMATION,
-                "Proposed duration: " + listing.getLendingDays() + " days\n\nSend request?",
-                ButtonType.OK, ButtonType.CANCEL);
-        dialog.setTitle("Borrow Request");
-        dialog.setHeaderText("Request to borrow: " + listing.getItemName());
-        dialog.showAndWait().filter(ButtonType.OK::equals).ifPresent(button -> {
-            DatabaseManager.createOffer(currentUser().getUsername(),
-                    Integer.parseInt(listing.getId()), 0, "borrow");
-            notifySeller(listing, "Borrow request received",
-                    currentUser().getFullName() + " requested to borrow " + listing.getItemName());
-            showInfo("Borrow request submitted.");
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+        alert.setTitle("Borrow Request");
+        alert.setHeaderText("Request to borrow: " + listing.getTitle());
+        alert.setContentText("Proposed duration: " + (listing.getLendingDays() != null ? listing.getLendingDays() + " days" : "N/A") +
+                "\n\nSend borrow request to seller?");
+        alert.showAndWait().ifPresent(resp -> {
+            if (resp == ButtonType.OK) {
+                new Alert(Alert.AlertType.INFORMATION, "Borrow request sent!\n(Demo only)").showAndWait();
+            }
         });
     }
 
     private void claimItem(Listing listing) {
-        Alert dialog = new Alert(Alert.AlertType.CONFIRMATION,
-                "Are you sure you want to claim this item?", ButtonType.OK, ButtonType.CANCEL);
-        dialog.setTitle("Claim Item");
-        dialog.setHeaderText("Claim: " + listing.getItemName());
-        dialog.showAndWait().filter(ButtonType.OK::equals).ifPresent(button -> {
-            DatabaseManager.createOffer(currentUser().getUsername(),
-                    Integer.parseInt(listing.getId()), 0, "giveaway");
-            notifySeller(listing, "Giveaway claimed",
-                    currentUser().getFullName() + " claimed " + listing.getItemName());
-            showInfo("Claim request submitted.");
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+        alert.setTitle("Claim Item");
+        alert.setHeaderText("Claim: " + listing.getTitle());
+        alert.setContentText("Are you sure you want to claim this giveaway item?");
+        alert.showAndWait().ifPresent(resp -> {
+            if (resp == ButtonType.OK) {
+                new Alert(Alert.AlertType.INFORMATION, "Item claimed successfully!\n(Demo only)").showAndWait();
+            }
         });
-    }
-
-    private void notifySeller(Listing listing, String title, String message) {
-        DatabaseManager.createNotification(listing.getSellerUsername(),
-                currentUser().getUsername(), title, message, "Deal");
     }
 
     @FXML
     private void showMyDeals() {
         setActive(btnDeals, "My Deals");
-        renderOfferTable(false);
+        contentPane.getChildren().clear();
+
+        VBox root = new VBox(16);
+        root.setPadding(new Insets(4));
+
+        Label info = new Label("Active offers, borrow requests and claims");
+        info.setStyle("-fx-text-fill: #5a5a7a;");
+        root.getChildren().add(info);
+
+        TableView<String[]> table = new TableView<>();
+        table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
+
+        TableColumn<String[], String> colTitle = new TableColumn<>("Item");
+        colTitle.setCellValueFactory(c -> new javafx.beans.property.SimpleStringProperty(c.getValue()[0]));
+        TableColumn<String[], String> colSeller = new TableColumn<>("Seller");
+        colSeller.setCellValueFactory(c -> new javafx.beans.property.SimpleStringProperty(c.getValue()[1]));
+        TableColumn<String[], String> colType = new TableColumn<>("Type");
+        colType.setCellValueFactory(c -> new javafx.beans.property.SimpleStringProperty(c.getValue()[2]));
+        TableColumn<String[], String> colStatus = new TableColumn<>("Status");
+        colStatus.setCellValueFactory(c -> new javafx.beans.property.SimpleStringProperty(c.getValue()[3]));
+        TableColumn<String[], String> colAction = new TableColumn<>("Action");
+        colAction.setCellValueFactory(c -> new javafx.beans.property.SimpleStringProperty(c.getValue()[4]));
+
+        table.getColumns().addAll(colTitle, colSeller, colType, colStatus, colAction);
+
+        User user = SessionManager.getCurrentUser();
+        List<Map<String, Object>> offers = user == null
+                ? List.of()
+                : DatabaseManager.fetchBuyerOffers(user.getUsername());
+        List<String[]> rows = new java.util.ArrayList<>();
+        for (Map<String, Object> offer : offers) {
+            rows.add(new String[]{
+                    String.valueOf(offer.get("item_name")),
+                    String.valueOf(offer.get("seller_name")),
+                    String.valueOf(offer.get("listing_type")),
+                    "Submitted",
+                    "Chatbox"
+            });
+        }
+        table.setItems(FXCollections.observableArrayList(rows));
+
+        root.getChildren().add(table);
+        Label note = new Label("💡 Self-return for borrowed items and mark-complete are available here in the full version.");
+        note.setStyle("-fx-text-fill: #9aa0b0; -fx-font-size: 12px;");
+        root.getChildren().add(note);
+
+        contentPane.getChildren().add(root);
     }
 
     @FXML
     private void showHistory() {
         setActive(btnHistory, "Deal History");
-        renderOfferTable(true);
-    }
-
-    private void renderOfferTable(boolean history) {
         contentPane.getChildren().clear();
+
         VBox root = new VBox(16);
         root.setPadding(new Insets(4));
+
+        HBox filters = new HBox(12);
+        filters.setAlignment(Pos.CENTER_LEFT);
+        DatePicker from = new DatePicker();
+        from.setPromptText("From");
+        DatePicker to = new DatePicker();
+        to.setPromptText("To");
+        TextField search = new TextField();
+        search.setPromptText("Search by title / seller...");
+        filters.getChildren().addAll(new Label("Date range:"), from, new Label("–"), to, search);
+        root.getChildren().add(filters);
+
         TableView<String[]> table = new TableView<>();
         table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
-        addColumn(table, "Item", 0);
-        addColumn(table, "Seller", 1);
-        addColumn(table, "Type", 2);
-        addColumn(table, "Status", 3);
-        addColumn(table, history ? "Date" : "Action", 4);
-
-        List<String[]> rows = new ArrayList<>();
-        for (Map<String, Object> offer : DatabaseManager.fetchBuyerOffers(currentUser().getUsername())) {
-            String status = String.valueOf(offer.get("listing_status"));
-            boolean completed = List.of("SOLD", "LENT", "GIVEN").contains(status);
-            if (history != completed) continue;
-            String action = history ? String.valueOf(offer.get("posted_at"))
-                    : "Offer: HK$" + offer.get("price");
-            rows.add(new String[]{String.valueOf(offer.get("item_name")),
+        TableColumn<String[], String> c1 = new TableColumn<>("Item Title");
+        c1.setCellValueFactory(d -> new javafx.beans.property.SimpleStringProperty(d.getValue()[0]));
+        TableColumn<String[], String> c2 = new TableColumn<>("Seller");
+        c2.setCellValueFactory(d -> new javafx.beans.property.SimpleStringProperty(d.getValue()[1]));
+        TableColumn<String[], String> c3 = new TableColumn<>("Deal Date");
+        c3.setCellValueFactory(d -> new javafx.beans.property.SimpleStringProperty(d.getValue()[2]));
+        TableColumn<String[], String> c4 = new TableColumn<>("Type");
+        c4.setCellValueFactory(d -> new javafx.beans.property.SimpleStringProperty(d.getValue()[3]));
+        TableColumn<String[], String> c5 = new TableColumn<>("Outcome");
+        c5.setCellValueFactory(d -> new javafx.beans.property.SimpleStringProperty(d.getValue()[4]));
+        table.getColumns().addAll(c1, c2, c3, c4, c5);
+        User user = SessionManager.getCurrentUser();
+        List<Map<String, Object>> offers = user == null
+                ? List.of()
+                : DatabaseManager.fetchBuyerOffers(user.getUsername());
+        List<String[]> rows = new java.util.ArrayList<>();
+        for (Map<String, Object> offer : offers) {
+            rows.add(new String[]{
+                    String.valueOf(offer.get("item_name")),
                     String.valueOf(offer.get("seller_name")),
-                    String.valueOf(offer.get("listing_type")), status, action});
+                    String.valueOf(offer.get("posted_date")),
+                    String.valueOf(offer.get("listing_type")),
+                    "Submitted"
+            });
         }
         table.setItems(FXCollections.observableArrayList(rows));
         root.getChildren().add(table);
-        if (rows.isEmpty()) {
-            root.getChildren().add(new Label(history ? "No completed deals yet." : "No active deals yet."));
-        }
         contentPane.getChildren().add(root);
-    }
-
-    private void addColumn(TableView<String[]> table, String title, int index) {
-        TableColumn<String[], String> column = new TableColumn<>(title);
-        column.setCellValueFactory(cell ->
-                new javafx.beans.property.SimpleStringProperty(cell.getValue()[index]));
-        table.getColumns().add(column);
     }
 
     @FXML
     private void showFavourites() {
         setActive(btnFavourites, "Favourites & Following");
         contentPane.getChildren().clear();
-        VBox root = new VBox(12);
-        root.setPadding(new Insets(8));
+        VBox root = new VBox(16);
+        root.setPadding(new Insets(4));
         FlowPane grid = new FlowPane(16, 16);
-        for (Listing listing : DatabaseManager.fetchFavouriteListings(currentUser().getUsername())) {
-            grid.getChildren().add(createListingCard(listing));
-        }
-        root.getChildren().add(grid);
-        if (grid.getChildren().isEmpty()) {
-            root.getChildren().add(new Label("You have no favourite listings."));
+        grid.setPrefWrapLength(900);
+        User user = SessionManager.getCurrentUser();
+        List<Listing> favourites = user == null
+                ? List.of()
+                : DatabaseManager.fetchFavouriteListings(user.getUsername());
+        if (favourites.isEmpty()) {
+            root.getChildren().add(new Label("No favourite listings yet."));
+        } else {
+            for (Listing listing : favourites) {
+                grid.getChildren().add(createListingCard(listing));
+            }
+            root.getChildren().add(grid);
         }
         contentPane.getChildren().add(root);
     }
@@ -296,80 +422,103 @@ public class BuyerDashboardController {
     private void showNotifications() {
         setActive(btnNotifications, "Notification Board");
         contentPane.getChildren().clear();
+
         VBox root = new VBox(12);
         root.setPadding(new Insets(4));
-        List<Notification> notifications = DatabaseManager.fetchNotifications(currentUser().getUsername());
-        for (Notification notification : notifications) {
-            Label title = new Label(notification.getTitle());
-            title.setStyle("-fx-font-weight: bold;");
-            Label message = new Label(notification.getMessage());
-            message.setWrapText(true);
-            Label meta = new Label(notification.getCategory() + " · "
-                    + notification.getTimestamp().format(DATE_TIME_FORMAT));
-            root.getChildren().add(new VBox(4, title, message, meta));
+
+        User user = SessionManager.getCurrentUser();
+        List<Notification> notifs = user == null
+                ? List.of()
+                : DataService.getNotificationsFor(user.getUsername());
+
+        if (notifs.isEmpty()) {
+            Label empty = new Label("No notifications yet.");
+            empty.setStyle("-fx-text-fill: #5a5a7a;");
+            root.getChildren().add(empty);
+        } else {
+            for (Notification n : notifs) {
+                VBox item = new VBox(4);
+                item.getStyleClass().add("notif-item");
+                Label title = new Label(n.getTitle());
+                title.setStyle("-fx-font-weight: bold; -fx-text-fill: #1a1a2e;");
+                Label msg = new Label(n.getMessage());
+                msg.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 13px;");
+                msg.setWrapText(true);
+                Label meta = new Label(n.getCategory() + " · " +
+                        n.getTimestamp().format(DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm")));
+                meta.setStyle("-fx-text-fill: #9aa0b0; -fx-font-size: 11px;");
+                item.getChildren().addAll(title, msg, meta);
+                root.getChildren().add(item);
+            }
         }
-        if (notifications.isEmpty()) root.getChildren().add(new Label("No notifications yet."));
-        contentPane.getChildren().add(new ScrollPane(root));
+
+        ScrollPane scroll = new ScrollPane(root);
+        scroll.setFitToWidth(true);
+        contentPane.getChildren().add(scroll);
     }
 
     @FXML
     private void showProfile() {
         setActive(btnProfile, "Manage Profile");
         contentPane.getChildren().clear();
-        User user = currentUser();
-        TextField name = new TextField(user.getFullName());
-        ComboBox<String> residence = new ComboBox<>(
-                FXCollections.observableArrayList(DataService.RESIDENCES));
-        residence.setValue(user.getResidenceHall());
-        PasswordField password = new PasswordField();
-        PasswordField confirmation = new PasswordField();
-        Button save = new Button("Save Changes");
-        save.getStyleClass().add("btn-primary");
-        save.setOnAction(event -> saveProfile(user, name, residence, password, confirmation));
-        VBox form = new VBox(10, new Label("Full Name"), name, new Label("Residence"),
-                residence, new Label("New Password"), password,
-                new Label("Confirm Password"), confirmation, save);
+
+        User user = SessionManager.getCurrentUser();
+        VBox form = new VBox(14);
         form.setPadding(new Insets(8));
         form.setMaxWidth(420);
         form.getStyleClass().add("card");
+
+        Label title = new Label("Edit your profile");
+        title.getStyleClass().add("section-title");
+
+        TextField nameField = new TextField(user != null ? user.getFullName() : "");
+        nameField.setPromptText("Full Name");
+        PasswordField newPass = new PasswordField();
+        newPass.setPromptText("New password (leave blank to keep)");
+        PasswordField confirmPass = new PasswordField();
+        confirmPass.setPromptText("Confirm new password");
+        ComboBox<String> residence = new ComboBox<>(FXCollections.observableArrayList(DataService.RESIDENCES));
+        if (user != null && user.getResidenceHall() != null) {
+            residence.setValue(user.getResidenceHall());
+        }
+
+        Button saveBtn = new Button("Save Changes");
+        saveBtn.getStyleClass().add("btn-primary");
+        saveBtn.setOnAction(e -> {
+
+            boolean changePassword = !newPass.getText().isBlank();
+            if (changePassword) {
+                String password = newPass.getText();
+                if (!password.equals(confirmPass.getText())) {
+                    new Alert(Alert.AlertType.ERROR, "Passwords do not match!").showAndWait();
+                    return;
+                }
+                
+                String pwdCheck = DataService.checkPasswordStrength(password);
+                if (!"OK".equals(pwdCheck)) {
+                    new Alert(Alert.AlertType.ERROR, "Password is too weak! Must be at least 8 characters, include uppercase, lowercase, and a number.").showAndWait();
+                    return;
+                }
+
+            }
+
+            DatabaseManager.updateUserProfile(user.getUsername(), nameField.getText().trim(),
+                    residence.getValue(), user.getBio(), user.getPreferredMeetup(),
+                    changePassword ? DataService.hashPassword(newPass.getText()) : null);
+            user.setFullName(nameField.getText().trim());
+            user.setResidenceHall(residence.getValue());
+
+            new Alert(Alert.AlertType.INFORMATION, "Profile updated successfully.").showAndWait();
+        });
+
+        form.getChildren().addAll(title,
+                new Label("Full Name"), nameField,
+                new Label("New Password"), newPass,
+                new Label("Confirm Password"), confirmPass,
+                new Label("Residence"), residence,
+                saveBtn);
+
         contentPane.getChildren().add(form);
-    }
-
-    private void saveProfile(User user, TextField name, ComboBox<String> residence,
-                             PasswordField password, PasswordField confirmation) {
-        String newName = name.getText().trim();
-        if (newName.isEmpty()) {
-            showError("Full name cannot be empty.");
-            return;
-        }
-        String hash = null;
-        if (!password.getText().isBlank()) {
-            if (!password.getText().equals(confirmation.getText())) {
-                showError("Passwords do not match.");
-                return;
-            }
-            String result = DataService.checkPasswordStrength(password.getText());
-            if (!"OK".equals(result)) {
-                showError(result);
-                return;
-            }
-            hash = DataService.hashPassword(password.getText());
-        }
-        DatabaseManager.updateUserProfile(user.getUsername(), newName, residence.getValue(),
-                user.getBio(), user.getPreferredMeetup(), hash);
-        user.setFullName(newName);
-        user.setResidenceHall(residence.getValue());
-        if (hash != null) user.setPasswordHash(hash);
-        welcomeLabel.setText("Hello, " + newName);
-        showInfo("Profile updated successfully.");
-    }
-
-    private void showInfo(String message) {
-        new Alert(Alert.AlertType.INFORMATION, message).showAndWait();
-    }
-
-    private void showError(String message) {
-        new Alert(Alert.AlertType.ERROR, message).showAndWait();
     }
 
     @FXML
