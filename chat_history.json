@@ -1,14 +1,38 @@
 {
-    "<listing_id>": {
-        "messages": [
-            {
-                "timestamp": "<timestamp>",
-                "user": "<user_id>",
-                "role": "buyer | seller",
-                "content": "<message_content>"
-            }
-        ],
-        "seen_buyer": false,
-        "seen_seller": false
-    }
+  "\u003clisting_id\u003e": {
+    "messages": [
+      {
+        "timestamp": "\u003ctimestamp\u003e",
+        "user": "\u003cuser_id\u003e",
+        "role": "buyer | seller",
+        "content": "\u003cmessage_content\u003e"
+      }
+    ],
+    "seen_buyer": false,
+    "seen_seller": false
+  },
+  "1": {
+    "messages": [
+      {
+        "timestamp": "2026-11-12T17:18:20.365067",
+        "user": "aha",
+        "role": "buyer",
+        "content": "asdf"
+      },
+      {
+        "timestamp": "2026-11-12T17:30:49.966835700",
+        "user": "aha",
+        "role": "buyer",
+        "content": "hihi"
+      },
+      {
+        "timestamp": "2026-11-12T17:31:15.429733500",
+        "user": "aha",
+        "role": "buyer",
+        "content": "ohno"
+      }
+    ],
+    "seen_buyer": true,
+    "seen_seller": false
+  }
 }

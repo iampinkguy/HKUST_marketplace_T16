@@ -59,7 +59,6 @@ public class DatabaseManager {
                 rating_count INTEGER NOT NULL DEFAULT 0
             )
             """);
-
         runSql("""
                 CREATE TABLE IF NOT EXISTS listings (
                 listing_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -93,8 +92,8 @@ public class DatabaseManager {
                     'UG Hall 1', 'UG Hall 2', 'North Gate', 'South Gate',
                     'Shaw Auditorium', 'Coffee Shop (LG5)', 'Sports Hall'
                 )),
-                posted_at DATE NOT NULL,
-                availability_status TEXT NOT NULL,
+                posted_date DATE NOT NULL,
+                availability_status TEXT NOT NULL CHECK(availability_status IN ('Available', 'Unavailable')),
                 views INTEGER NOT NULL DEFAULT 0,
                 approved INTEGER NOT NULL DEFAULT -1
             )
@@ -143,7 +142,6 @@ public class DatabaseManager {
                 is_read INTEGER NOT NULL DEFAULT 0
             )
             """);
-
         runSql("""
                 CREATE TABLE IF NOT EXISTS favourites (
                 buyer_username TEXT NOT NULL REFERENCES users(username),
@@ -601,13 +599,13 @@ public class DatabaseManager {
     public static List<Map<String, Object>> fetchBuyerOffers(String buyerUsername) {
         String sql = """
             SELECT o.buyer_username, o.listing_id, o.price, o.chatbox_id,
-                   l.item_name, l.listing_type, l.listing_status, l.posted_at,
+                   l.item_name, l.listing_type, l.listing_status, l.posted_date,
                    l.seller, u.full_name AS seller_name
             FROM offers o
             JOIN listings l ON l.listing_id = o.listing_id
             JOIN users u ON u.username = l.seller
             WHERE o.buyer_username = ?
-            ORDER BY l.posted_at DESC
+            ORDER BY l.posted_date DESC
             """;
         return fetchQuery(sql, buyerUsername);
     }
@@ -617,7 +615,7 @@ public class DatabaseManager {
             SELECT l.* FROM listings l
             JOIN favourites f ON f.listing_id = l.listing_id
             WHERE f.buyer_username = ?
-            ORDER BY l.posted_at DESC
+            ORDER BY l.posted_date DESC
             """;
         List<Listing> listings = new ArrayList<>();
         for (Map<String, Object> row : fetchQuery(sql, buyerUsername)) {
@@ -1037,6 +1035,43 @@ public class DatabaseManager {
             Files.writeString(CHAT_HISTORY_FILE, JSON.toJson(history), StandardCharsets.UTF_8);
         } catch (IOException e) {
             throw new IllegalStateException("Could not write chat history", e);
+        }
+    }
+
+    public static void markChatHistorySeen(String listingId, String role) {
+        if (listingId == null || listingId.isBlank()) {
+            throw new IllegalArgumentException("Listing ID must not be blank");
+        }
+        if (!"buyer".equals(role) && !"seller".equals(role)) {
+            throw new IllegalArgumentException("Chat role must be buyer or seller");
+        }
+
+        JsonObject history;
+        try {
+            if (Files.exists(CHAT_HISTORY_FILE)) {
+                history = JsonParser.parseString(
+                        Files.readString(CHAT_HISTORY_FILE, StandardCharsets.UTF_8)).getAsJsonObject();
+            } else {
+                history = new JsonObject();
+            }
+
+            JsonObject listingHistory = history.has(listingId)
+                    ? history.getAsJsonObject(listingId)
+                    : new JsonObject();
+            if (!listingHistory.has("messages")) {
+                listingHistory.add("messages", new JsonArray());
+            }
+            if (!listingHistory.has("seen_buyer")) {
+                listingHistory.addProperty("seen_buyer", false);
+            }
+            if (!listingHistory.has("seen_seller")) {
+                listingHistory.addProperty("seen_seller", false);
+            }
+            listingHistory.addProperty("seen_" + role, true);
+            history.add(listingId, listingHistory);
+            Files.writeString(CHAT_HISTORY_FILE, JSON.toJson(history), StandardCharsets.UTF_8);
+        } catch (IOException | JsonParseException | IllegalStateException e) {
+            throw new IllegalStateException("Could not update chat history seen status", e);
         }
     }
 }

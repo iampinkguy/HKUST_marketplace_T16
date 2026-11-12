@@ -2,9 +2,11 @@ package com.hkust.marketplace.utils;
 
 import com.hkust.marketplace.models.User;
 import com.hkust.marketplace.models.UserRole;
+import com.hkust.marketplace.models.ChatHistory;
 import com.hkust.marketplace.models.Listing;
 import com.hkust.marketplace.models.ListingStatus;
 import com.hkust.marketplace.models.ListingType;
+import com.hkust.marketplace.models.Message;
 import com.hkust.marketplace.models.Notification;
 
 import java.time.LocalDate;
@@ -170,7 +172,7 @@ public class DataService {
     /** Shared read for the buyer team's database integration; approval publishes into this result. */
     public static List<Listing> getLiveListings() {
         List<Listing> listings = new ArrayList<>();
-        for (Map<String, Object> row : DatabaseManager.fetchRows("listings", Map.of("approved", 1))) {
+        for (Map<String, Object> row : DatabaseManager.fetchRows("listings", Map.of("listing_status", ListingStatus.LIVE.name()))) {
             listings.add(toListing(row));
         }
         listings.sort(Comparator.comparing(Listing::getPostedAt,
@@ -237,12 +239,15 @@ public class DataService {
         listing.setCategory((String) row.get("category"));
         listing.setCondition((String) row.get("item_condition"));
         listing.setMeetupLocation((String) row.get("meetup_location"));
-        listing.setStatus(switch (((Number) row.get("approved")).intValue()) {
-            case -1 -> ListingStatus.PENDING_REVIEW;
-            case 0 -> ListingStatus.REJECTED;
-            case 1 -> ListingStatus.LIVE;
-            default -> throw new IllegalStateException("Unknown listing review status.");
-        });
+        String listingStatus = (String) row.get("listing_status");
+        listing.setStatus(listingStatus == null
+                ? switch (((Number) row.get("approved")).intValue()) {
+                    case -1 -> ListingStatus.PENDING_REVIEW;
+                    case 0 -> ListingStatus.REJECTED;
+                    case 1 -> ListingStatus.LIVE;
+                    default -> throw new IllegalStateException("Unknown listing review status.");
+                }
+                : ListingStatus.valueOf(listingStatus));
         String type = (String) row.get("listing_type");
         listing.setType(type == null ? null : ListingType.valueOf(type));
         Number price = (Number) row.get("price");
@@ -258,7 +263,13 @@ public class DataService {
             listing.setSellerFullName(seller == null ? listing.getSellerUsername() : (String) seller.get("full_name"));
         }
         try {
-            listing.setPostedAt(parseDate((String) row.get("posted_date")));
+            LocalDateTime postedAt = parseDate((String) row.get("posted_date"));
+            if (postedAt == null) {
+                postedAt = parseDate((String) row.get("submitted_at"));
+            }
+            if (postedAt != null) {
+                listing.setPostedAt(postedAt);
+            }
             listing.setSubmittedAt(parseDate((String) row.get("submitted_at")));
             listing.setReviewedAt(parseDate((String) row.get("reviewed_at")));
             listing.setRejectionReason((String) row.get("rejection_reason"));
@@ -373,7 +384,7 @@ public class DataService {
         }
         
         listing.setMeetupLocation((String) map.get("meetup_location"));
-        listing.setPostedAt(LocalDateTime.parse((String) map.get("posted_at")));
+        listing.setPostedAt(LocalDateTime.parse((String) map.get("posted_date")));
         listing.setAvailabilityStatus((String) map.get("availability_status"));
         listing.setViewCount(((Number) map.get("views")).intValue());
         listing.setIsApproved(((Boolean) map.get("approved")).booleanValue() == true);
@@ -388,5 +399,28 @@ public class DataService {
         // listing.setReviewedAt(map.get("reviewed_at") != null ? LocalDateTime.parse((String) map.get("reviewed_at")) : null);
         // listing.setRejectionReason((String) map.get("rejection_reason"));
         return listing;
+    }
+
+    public static ChatHistory toChatHistory(Map<String, Object> row) {
+        ChatHistory chatHistory = new ChatHistory();
+        chatHistory.setListing_id((String) row.get("listing_id"));
+        chatHistory.setSeen_buyer(((Number) row.get("seen_buyer")).intValue() != 0);
+        chatHistory.setSeen_seller(((Number) row.get("seen_seller")).intValue() != 0);
+
+        List<Message> messages = new ArrayList<>();
+        for (int i = 1; i <= ((Number) row.get("message_count")).intValue(); i++) {
+            String messageKey = "message" + i;
+            if (row.containsKey(messageKey)) {
+                Map<String, Object> messageRow = (Map<String, Object>) row.get(messageKey);
+                Message message = new Message();
+                message.setSender_id((String) messageRow.get("sender_id"));
+                message.setSender_role((String) messageRow.get("sender_role"));
+                message.setContent((String) messageRow.get("content"));
+                message.setTimestamp(LocalDateTime.parse((String) messageRow.get("timestamp")));
+                messages.add(message);
+            }
+        }
+        chatHistory.setMessages(messages);
+        return chatHistory;
     }
 }
