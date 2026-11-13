@@ -34,5 +34,29 @@
     ],
     "seen_buyer": true,
     "seen_seller": false
+  },
+  "3": {
+    "messages": [
+      {
+        "timestamp": "2026-11-13T16:14:30.686029300",
+        "user": "alice",
+        "role": "buyer",
+        "content": "hi"
+      }
+    ],
+    "seen_buyer": true,
+    "seen_seller": false
+  },
+  "6": {
+    "messages": [
+      {
+        "timestamp": "2026-11-13T17:14:46.842528300",
+        "user": "alice",
+        "role": "buyer",
+        "content": "hey I want this"
+      }
+    ],
+    "seen_buyer": true,
+    "seen_seller": false
   }
 }

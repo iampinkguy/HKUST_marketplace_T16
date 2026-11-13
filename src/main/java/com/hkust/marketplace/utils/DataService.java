@@ -9,6 +9,7 @@ import com.hkust.marketplace.models.ListingType;
 import com.hkust.marketplace.models.Message;
 import com.hkust.marketplace.models.Notification;
 
+import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeParseException;
@@ -180,6 +181,73 @@ public class DataService {
         return listings;
     }
 
+    public static List<Listing> getSellerListings() {
+        String sellerUsername = requireSeller();
+        List<Listing> listings = new ArrayList<>();
+        for (Map<String, Object> row : DatabaseManager.fetchRows("listings",
+                Map.of("seller_username", sellerUsername))) {
+            listings.add(toListing(row));
+        }
+        listings.sort(Comparator.comparing(Listing::getSubmittedAt,
+                Comparator.nullsLast(Comparator.reverseOrder())).thenComparing(Listing::getId));
+        return listings;
+    }
+
+    public static void submitListing(Listing listing, List<Path> photos) {
+        String sellerUsername = requireSeller();
+        if (listing == null || photos == null) {
+            throw new IllegalArgumentException("Listing details and photos are required.");
+        }
+        if (photos.size() > 6) {
+            throw new IllegalArgumentException("A listing cannot have more than 6 photos.");
+        }
+        if (listing.getType() == null
+                || listing.getTitle() == null || listing.getTitle().isBlank()
+                || listing.getCategory() == null || !CATEGORIES.contains(listing.getCategory())
+                || listing.getCondition() == null || !CONDITIONS.contains(listing.getCondition())
+                || listing.getDescription() == null || listing.getDescription().isBlank()
+                || listing.getMeetupLocation() == null || !HKUST_LOCATIONS.contains(listing.getMeetupLocation())) {
+            throw new IllegalArgumentException("Complete all required listing details.");
+        }
+
+        switch (listing.getType()) {
+            case SELL -> {
+                if (listing.getPrice() == null || !Double.isFinite(listing.getPrice()) || listing.getPrice() < 0) {
+                    throw new IllegalArgumentException("Enter a valid non-negative price for a Sell listing.");
+                }
+                listing.setLendingDays(null);
+            }
+            case LEND -> {
+                if (listing.getLendingDays() == null || listing.getLendingDays() <= 0) {
+                    throw new IllegalArgumentException("Enter a positive lending duration in days.");
+                }
+                listing.setPrice(null);
+            }
+            case GIVEAWAY -> {
+                listing.setPrice(null);
+                listing.setLendingDays(null);
+            }
+        }
+
+        listing.setTitle(listing.getTitle().trim());
+        listing.setDescription(listing.getDescription().trim());
+        listing.setStatus(ListingStatus.PENDING_REVIEW);
+        DatabaseManager.submitListing(listing, sellerUsername, List.copyOf(photos));
+    }
+
+    private static String requireSeller() {
+        User user = SessionManager.getCurrentUser();
+        if (user == null || user.getRole() != UserRole.SELLER || !user.isActive()) {
+            throw new SecurityException("An active seller account is required.");
+        }
+        Map<String, Object> account = DatabaseManager.fetchRow("users", "username", user.getUsername());
+        if (account == null || !"SELLER".equals(account.get("role"))
+                || ((Number) account.get("active")).intValue() != 1) {
+            throw new SecurityException("An active seller account is required.");
+        }
+        return (String) account.get("username");
+    }
+
     /** Shared read for the seller team's notification integration. */
     public static List<Notification> getNotificationsFor(String username) {
         User user = SessionManager.getCurrentUser();
@@ -264,12 +332,10 @@ public class DataService {
         }
         try {
             LocalDateTime postedAt = parseDate((String) row.get("posted_date"));
-            if (postedAt == null) {
+            if (postedAt == null && listingStatus == null) {
                 postedAt = parseDate((String) row.get("submitted_at"));
             }
-            if (postedAt != null) {
-                listing.setPostedAt(postedAt);
-            }
+            listing.setPostedAt(postedAt);
             listing.setSubmittedAt(parseDate((String) row.get("submitted_at")));
             listing.setReviewedAt(parseDate((String) row.get("reviewed_at")));
             listing.setRejectionReason((String) row.get("rejection_reason"));

@@ -26,6 +26,7 @@ com\hkust\marketplace\controllers\admin\AdminLoginController.class
 com\hkust\marketplace\controllers\buyer\BuyerDashboardController$2.class
 com\hkust\marketplace\controllers\seller\SellerDashboardController.class
 com\hkust\marketplace\models\User.class
+com\hkust\marketplace\utils\DataService$1.class
 com\hkust\marketplace\controllers\seller\SellerDashboardController$1.class
 com\hkust\marketplace\utils\DummyDataService.class
 com\hkust\marketplace\controllers\buyer\BuyerDashboardController.class
