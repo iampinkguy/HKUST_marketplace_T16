@@ -1,4 +1,7 @@
 package com.hkust.marketplace.utils;
+
+import javax.imageio.ImageIO;
+
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -9,6 +12,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -18,6 +22,7 @@ import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
 import com.hkust.marketplace.models.ChatHistory;
 import com.hkust.marketplace.models.Listing;
+import com.hkust.marketplace.models.ListingStatus;
 import com.hkust.marketplace.models.Message;
 import com.hkust.marketplace.models.Notification;
 import com.hkust.marketplace.models.User;
@@ -100,6 +105,7 @@ public class DatabaseManager {
             """);
 
         migrateListingSchema();
+        migrateListingReviewSchema();
 
         runSql("""
                 CREATE TABLE IF NOT EXISTS offers (
@@ -431,33 +437,36 @@ public class DatabaseManager {
 
         String sql = """
             INSERT INTO listings (
-                item_name, category, item_condition, description, numPhotos, 
+                item_name, listing_type, category, item_condition, listing_status, price, lending_days,
+                seller, description, numPhotos,
                 photo1, photo2, photo3, photo4, photo5, photo6, 
-                meetup_location, submitted_at, availability_status, seller_username, listing_type, price, lending_days
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                meetup_location, posted_date, submitted_at, availability_status, approved, seller_username
+            ) VALUES (?, COALESCE(?, 'SELL'), ?, ?, 'PENDING_REVIEW', ?, ?, COALESCE(?, ''),
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, -1, ?)
         """;
 
         try (Connection connection = connect();
              PreparedStatement stmt = connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
 
             stmt.setString(1, itemName);
-            stmt.setString(2, category);
-            stmt.setString(3, itemCondition);
-            stmt.setString(4, description); // Can be null
-            stmt.setInt(5, numPhotos);
-            stmt.setString(6, photo1);      // Can be null
-            stmt.setString(7, photo2);      // Can be null
-            stmt.setString(8, photo3);      // Can be null
-            stmt.setString(9, photo4);      // Can be null
-            stmt.setString(10, photo5);     // Can be null
-            stmt.setString(11, photo6);     // Can be null
-            stmt.setString(12, meetupLocation);
-            stmt.setString(13, submittedAt == null || submittedAt.isBlank() ? LocalDateTime.now().toString() : submittedAt);
-            stmt.setString(14, availabilityStatus);
-            stmt.setString(15, sellerUsername);
-            stmt.setString(16, listingType);
-            stmt.setObject(17, price);
-            stmt.setObject(18, lendingDays);
+            stmt.setString(2, listingType);
+            stmt.setString(3, category);
+            stmt.setString(4, itemCondition);
+            stmt.setObject(5, price);
+            stmt.setObject(6, lendingDays);
+            stmt.setString(7, sellerUsername);
+            stmt.setString(8, description);
+            stmt.setInt(9, numPhotos);
+            stmt.setString(10, photo1);
+            stmt.setString(11, photo2);
+            stmt.setString(12, photo3);
+            stmt.setString(13, photo4);
+            stmt.setString(14, photo5);
+            stmt.setString(15, photo6);
+            stmt.setString(16, meetupLocation);
+            stmt.setString(17, submittedAt == null || submittedAt.isBlank() ? LocalDateTime.now().toString() : submittedAt);
+            stmt.setString(18, availabilityStatus);
+            stmt.setString(19, sellerUsername);
 
             stmt.executeUpdate();
 
@@ -471,6 +480,135 @@ public class DatabaseManager {
             }
         } catch (SQLException e) {
             throw new IllegalStateException("Could not create listing", e);
+        }
+    }
+
+    /** Saves a seller submission, its photos, and admin notifications as one database operation. */
+    public static String submitListing(Listing listing, String sellerUsername, List<Path> photos) {
+        if (listing == null || sellerUsername == null || sellerUsername.isBlank() || photos == null) {
+            throw new IllegalArgumentException("Listing, seller, and photos are required.");
+        }
+        if (photos.size() > 6) {
+            throw new IllegalArgumentException("A listing cannot have more than 6 photos.");
+        }
+
+        List<Path> storedPhotos = new ArrayList<>();
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            try {
+                String canonicalUsername;
+                String sellerName;
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        SELECT username, full_name FROM users
+                        WHERE username = ? COLLATE NOCASE AND role = 'SELLER' AND active = 1
+                        """)) {
+                    statement.setString(1, sellerUsername);
+                    try (ResultSet result = statement.executeQuery()) {
+                        if (!result.next()) {
+                            throw new SecurityException("An active seller account is required.");
+                        }
+                        canonicalUsername = result.getString("username");
+                        sellerName = result.getString("full_name");
+                    }
+                }
+
+                String[] photoNames = new String[6];
+                for (int i = 0; i < photos.size(); i++) {
+                    Path source = photos.get(i);
+                    String fileName = source == null ? "" : source.getFileName().toString();
+                    int extensionIndex = fileName.lastIndexOf('.');
+                    String extension = extensionIndex < 0 ? "" : fileName.substring(extensionIndex).toLowerCase();
+                    if (source == null || !Files.isRegularFile(source)
+                            || !List.of(".jpg", ".jpeg", ".png", ".gif", ".bmp")
+                            .contains(extension)) {
+                        throw new IllegalArgumentException("Choose a valid image file for each photo.");
+                    }
+                    if (ImageIO.read(source.toFile()) == null) {
+                        throw new IllegalArgumentException("Choose a valid image file for each photo.");
+                    }
+
+                    String storedName = UUID.randomUUID() + extension;
+                    Path destination = UPLOADS_DIR.resolve(storedName).normalize();
+                    if (!destination.getParent().equals(UPLOADS_DIR)) {
+                        throw new IllegalArgumentException("Invalid photo path.");
+                    }
+                    Files.createDirectories(UPLOADS_DIR);
+                    Files.copy(source, destination);
+                    storedPhotos.add(destination);
+                    photoNames[i] = Path.of("uploads", storedName).toString().replace('\\', '/');
+                }
+
+                LocalDateTime submittedAt = LocalDateTime.now();
+                String insertSql = """
+                        INSERT INTO listings (
+                            item_name, listing_type, category, item_condition, listing_status,
+                            price, lending_days, seller, seller_username, description, numPhotos,
+                            photo1, photo2, photo3, photo4, photo5, photo6, meetup_location,
+                            posted_date, submitted_at, availability_status, approved
+                        ) VALUES (?, ?, ?, ?, 'PENDING_REVIEW', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 'Available', -1)
+                        """;
+                int listingId;
+                try (PreparedStatement statement = connection.prepareStatement(insertSql, Statement.RETURN_GENERATED_KEYS)) {
+                    statement.setString(1, listing.getTitle());
+                    statement.setString(2, listing.getType().name());
+                    statement.setString(3, listing.getCategory());
+                    statement.setString(4, listing.getCondition());
+                    statement.setObject(5, listing.getPrice());
+                    statement.setObject(6, listing.getLendingDays());
+                    statement.setString(7, canonicalUsername);
+                    statement.setString(8, canonicalUsername);
+                    statement.setString(9, listing.getDescription());
+                    statement.setInt(10, photos.size());
+                    for (int i = 0; i < 6; i++) statement.setString(11 + i, photoNames[i]);
+                    statement.setString(17, listing.getMeetupLocation());
+                    statement.setString(18, submittedAt.toString());
+                    statement.executeUpdate();
+                    try (ResultSet keys = statement.getGeneratedKeys()) {
+                        if (!keys.next()) throw new SQLException("Creating listing failed, no ID obtained.");
+                        listingId = keys.getInt(1);
+                    }
+                }
+
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        INSERT INTO notifications (username, sender, title, message, category, timestamp)
+                        SELECT username, ?, 'New Listing Submitted', ?, 'System', ?
+                        FROM users WHERE role = 'ADMIN' AND active = 1
+                        """)) {
+                    statement.setString(1, canonicalUsername);
+                    statement.setString(2, sellerName + " submitted '" + listing.getTitle() + "' for review.");
+                    statement.setString(3, submittedAt.toString());
+                    if (statement.executeUpdate() == 0) {
+                        throw new IllegalStateException("No active admin account is available to notify.");
+                    }
+                }
+
+                connection.commit();
+                listing.setId(Integer.toString(listingId));
+                listing.setSellerUsername(canonicalUsername);
+                listing.setSellerFullName(sellerName);
+                listing.setStatus(ListingStatus.PENDING_REVIEW);
+                listing.setSubmittedAt(submittedAt);
+                listing.setPhotoPaths(java.util.Arrays.stream(photoNames)
+                        .filter(name -> name != null).toList());
+                return listing.getId();
+            } catch (SQLException | IOException | RuntimeException e) {
+                try {
+                    connection.rollback();
+                } catch (SQLException rollbackError) {
+                    e.addSuppressed(rollbackError);
+                }
+                for (Path photo : storedPhotos) {
+                    try {
+                        Files.deleteIfExists(photo);
+                    } catch (IOException cleanupError) {
+                        e.addSuppressed(cleanupError);
+                    }
+                }
+                if (e instanceof RuntimeException runtimeException) throw runtimeException;
+                throw new IllegalStateException("Could not submit listing.", e);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not submit listing.", e);
         }
     }
 
@@ -503,7 +641,7 @@ public class DatabaseManager {
 
                 String reviewedAt = LocalDateTime.now().toString();
                 try (PreparedStatement statement = connection.prepareStatement("""
-                        UPDATE listings SET approved = ?, reviewed_at = ?, reviewed_by = ?, rejection_reason = ?,
+                        UPDATE listings SET approved = ?, listing_status = ?, reviewed_at = ?, reviewed_by = ?, rejection_reason = ?,
                             posted_date = CASE WHEN ? = 1 AND (posted_date IS NULL OR TRIM(posted_date) = '')
                                 THEN ? ELSE posted_date END
                         WHERE listing_id = ? AND approved = -1 AND review_version = ?
@@ -511,14 +649,15 @@ public class DatabaseManager {
                               WHERE username = ? COLLATE NOCASE AND role = 'ADMIN' AND active = 1)
                         """)) {
                     statement.setInt(1, approved ? 1 : 0);
-                    statement.setString(2, reviewedAt);
-                    statement.setString(3, adminUsername);
-                    statement.setString(4, approved ? null : reason);
-                    statement.setInt(5, approved ? 1 : 0);
-                    statement.setString(6, reviewedAt);
-                    statement.setInt(7, listingId);
-                    statement.setLong(8, expectedVersion);
-                    statement.setString(9, adminUsername);
+                    statement.setString(2, approved ? "LIVE" : "REJECTED");
+                    statement.setString(3, reviewedAt);
+                    statement.setString(4, adminUsername);
+                    statement.setString(5, approved ? null : reason);
+                    statement.setInt(6, approved ? 1 : 0);
+                    statement.setString(7, reviewedAt);
+                    statement.setInt(8, listingId);
+                    statement.setLong(9, expectedVersion);
+                    statement.setString(10, adminUsername);
                     if (statement.executeUpdate() != 1) {
                         throw new IllegalStateException("Listing is no longer pending or the admin account is inactive.");
                     }
