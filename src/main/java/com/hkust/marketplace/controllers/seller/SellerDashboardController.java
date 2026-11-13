@@ -7,6 +7,7 @@ import com.hkust.marketplace.utils.DummyDataService;
 import com.hkust.marketplace.utils.SceneManager;
 import com.hkust.marketplace.utils.SessionManager;
 import javafx.collections.FXCollections;
+import javafx.concurrent.Task;
 import javafx.fxml.FXML;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -16,6 +17,8 @@ import javafx.scene.chart.NumberAxis;
 import javafx.scene.chart.PieChart;
 import javafx.scene.chart.XYChart;
 import javafx.scene.control.*;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
 import javafx.scene.layout.*;
 import javafx.stage.FileChooser;
 
@@ -103,28 +106,44 @@ public class SellerDashboardController {
 
         Button editBtn = new Button("Edit");
         editBtn.getStyleClass().addAll("btn-outline", "btn-sm");
-        editBtn.setOnAction(e -> new Alert(Alert.AlertType.INFORMATION,
-                "Edit form would open here.\n(Demo placeholder)").showAndWait());
+        editBtn.setOnAction(e -> showListingForm(l));
 
         Button delBtn = new Button("Delete");
         delBtn.getStyleClass().addAll("btn-danger", "btn-sm");
         delBtn.setOnAction(e -> {
-            Alert conf = new Alert(Alert.AlertType.CONFIRMATION, "Delete this listing?");
+            Alert conf = new Alert(Alert.AlertType.CONFIRMATION,
+                    "Permanently delete '" + l.getTitle() + "'?", ButtonType.CANCEL, ButtonType.OK);
+            conf.setHeaderText("Delete listing");
             conf.showAndWait().ifPresent(r -> {
                 if (r == ButtonType.OK) {
-                    DummyDataService.getInstance().removeListing(l.getId());
-                    showMyListings();
+                    try {
+                        DataService.deleteSellerListing(l.getId(), l.getReviewVersion());
+                        new Alert(Alert.AlertType.INFORMATION, "Listing deleted successfully.").showAndWait();
+                        showMyListings();
+                    } catch (IllegalStateException | SecurityException ex) {
+                        showProfileError("Could not delete listing: " + ex.getMessage());
+                    }
                 }
             });
         });
 
-        row.getChildren().addAll(info, status, editBtn, delBtn);
+        Button viewBtn = new Button("View");
+        viewBtn.getStyleClass().addAll("btn-outline", "btn-sm");
+        viewBtn.setOnAction(e -> showListingDetails(l));
+
+        row.getChildren().addAll(info, status, viewBtn, editBtn, delBtn);
         return row;
     }
 
     @FXML
     private void showCreateListing() {
-        setActive(btnCreate, "Create New Listing");
+        showListingForm(null);
+    }
+
+    private void showListingForm(Listing existing) {
+        boolean editing = existing != null;
+        setActive(editing ? btnListings : btnCreate,
+                editing ? "Edit Listing" : "Create New Listing");
         contentPane.getChildren().clear();
 
         VBox form = new VBox(12);
@@ -132,7 +151,7 @@ public class SellerDashboardController {
         form.getStyleClass().add("card");
         form.setPadding(new Insets(20));
 
-        Label title = new Label("Post a new item");
+        Label title = new Label(editing ? "Edit listing details" : "Post a new item");
         title.getStyleClass().add("section-title");
 
         ComboBox<String> typeCombo = new ComboBox<>(FXCollections.observableArrayList("Sell", "Lend", "Give Away"));
@@ -180,8 +199,16 @@ public class SellerDashboardController {
         VBox photoList = new VBox(6);
         Button choosePhotosBtn = new Button("Choose Photos (up to 6)");
         choosePhotosBtn.getStyleClass().add("btn-outline");
-        Label photoNote = new Label("Photos: 0 / 6");
+        Label photoNote = new Label(editing
+                ? "Current photos: " + existing.getPhotoPaths().size() + ". Leave replacement unchecked to keep them."
+                : "Photos: 0 / 6");
         photoNote.setStyle("-fx-text-fill: #9aa0b0; -fx-font-size: 12px;");
+        CheckBox replacePhotos = new CheckBox("Replace current photos");
+        replacePhotos.setVisible(editing);
+        replacePhotos.setManaged(editing);
+        choosePhotosBtn.setDisable(editing);
+        replacePhotos.selectedProperty().addListener((observable, oldValue, selected) ->
+                choosePhotosBtn.setDisable(!selected));
         choosePhotosBtn.setOnAction(e -> {
             FileChooser chooser = new FileChooser();
             chooser.setTitle("Choose item photos");
@@ -198,10 +225,25 @@ public class SellerDashboardController {
                 return;
             }
             selectedPhotos.addAll(newPhotos);
-            refreshPhotoSelection(selectedPhotos, photoList, photoNote);
+            refreshPhotoSelection(selectedPhotos, photoList, photoNote, editing);
         });
 
-        Button submitBtn = new Button("Submit for Review");
+        if (editing) {
+            typeCombo.setValue(switch (existing.getType()) {
+                case SELL -> "Sell";
+                case LEND -> "Lend";
+                case GIVEAWAY -> "Give Away";
+            });
+            nameField.setText(existing.getTitle());
+            catCombo.setValue(existing.getCategory());
+            condCombo.setValue(existing.getCondition());
+            descArea.setText(existing.getDescription());
+            meetupCombo.setValue(existing.getMeetupLocation());
+            if (existing.getPrice() != null) priceField.setText(existing.getPrice().toString());
+            if (existing.getLendingDays() != null) daysField.setText(existing.getLendingDays().toString());
+        }
+
+        Button submitBtn = new Button(editing ? "Save Changes for Review" : "Submit for Review");
         submitBtn.getStyleClass().add("btn-gold");
         submitBtn.setOnAction(e -> {
             clearInvalidFields(typeCombo, nameField, catCombo, condCombo, descArea, priceField, daysField, meetupCombo);
@@ -237,31 +279,65 @@ public class SellerDashboardController {
                         "Complete all required fields. Enter a non-negative price for Sell or a positive duration for Lend.").showAndWait();
                 return;
             }
-            User user = SessionManager.getCurrentUser();
+
             Listing listing = new Listing();
+            if (editing) {
+                listing.setId(existing.getId());
+                listing.setReviewVersion(existing.getReviewVersion());
+            }
             listing.setTitle(nameField.getText().trim());
             listing.setDescription(descArea.getText().trim());
             listing.setCategory(catCombo.getValue());
             listing.setCondition(condCombo.getValue());
             listing.setMeetupLocation(meetupCombo.getValue());
-            listing.setSellerUsername(user == null ? null : user.getUsername());
-            listing.setSellerFullName(user == null ? null : user.getFullName());
-            listing.setStatus(ListingStatus.PENDING_REVIEW);
             switch (typeCombo.getValue()) {
                 case "Sell" -> { listing.setType(ListingType.SELL); listing.setPrice(price); }
                 case "Lend" -> { listing.setType(ListingType.LEND); listing.setLendingDays(lendingDays); }
                 case "Give Away" -> listing.setType(ListingType.GIVEAWAY);
             }
-            try {
-                DataService.submitListing(listing, selectedPhotos);
-            } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
-                new Alert(Alert.AlertType.ERROR, "Could not submit listing: " + ex.getMessage()).showAndWait();
-                return;
-            }
-            new Alert(Alert.AlertType.INFORMATION,
-                    "Listing submitted successfully. Status: Pending Review.\nAn admin has been notified.").showAndWait();
-            showMyListings();
+
+            List<Path> photosToSave = List.copyOf(selectedPhotos);
+            boolean shouldReplacePhotos = replacePhotos.isSelected();
+            submitBtn.setDisable(true);
+            submitBtn.setText("Saving...");
+            Task<Void> saveTask = new Task<>() {
+                @Override
+                protected Void call() {
+                    if (editing) {
+                        DataService.updateSellerListing(listing, photosToSave, shouldReplacePhotos);
+                    } else {
+                        DataService.submitListing(listing, photosToSave);
+                    }
+                    return null;
+                }
+            };
+            saveTask.setOnSucceeded(event -> {
+                if (editing) {
+                    new Alert(Alert.AlertType.INFORMATION,
+                            "Changes saved. Your listing is Pending Review until an admin re-approves it.").showAndWait();
+                } else {
+                    new Alert(Alert.AlertType.INFORMATION,
+                            "Listing submitted successfully. Status: Pending Review.\nAn admin has been notified.").showAndWait();
+                }
+                showMyListings();
+            });
+            saveTask.setOnFailed(event -> {
+                submitBtn.setDisable(false);
+                submitBtn.setText(editing ? "Save Changes for Review" : "Submit for Review");
+                Throwable error = saveTask.getException();
+                String message = error == null || error.getMessage() == null
+                        ? "An unexpected error occurred."
+                        : error.getMessage();
+                new Alert(Alert.AlertType.ERROR, "Could not save listing: " + message).showAndWait();
+            });
+            Thread saveThread = new Thread(saveTask, "seller-listing-save");
+            saveThread.setDaemon(true);
+            saveThread.start();
         });
+
+        Button cancelBtn = new Button("Cancel");
+        cancelBtn.getStyleClass().add("btn-outline");
+        cancelBtn.setOnAction(e -> showMyListings());
 
         form.getChildren().addAll(title,
                 new Label("Listing Type *"), typeCombo,
@@ -271,15 +347,93 @@ public class SellerDashboardController {
                 new Label("Description *"), descArea,
                 priceGroup, daysGroup,
                 new Label("Meet-up Location *"), meetupCombo,
-                choosePhotosBtn, photoNote, photoList, submitBtn);
+                replacePhotos, choosePhotosBtn, photoNote, photoList,
+                new HBox(8, submitBtn, cancelBtn));
 
         ScrollPane scroll = new ScrollPane(form);
         scroll.setFitToWidth(true);
         contentPane.getChildren().add(scroll);
     }
 
-    private void refreshPhotoSelection(List<Path> selectedPhotos, VBox photoList, Label photoNote) {
-        photoNote.setText("Photos: " + selectedPhotos.size() + " / 6");
+    private void showListingDetails(Listing listing) {
+        String priceOrDuration = switch (listing.getType()) {
+            case SELL -> "Price: HK$ " + listing.getPrice();
+            case LEND -> "Lending duration: " + listing.getLendingDays() + " days";
+            case GIVEAWAY -> "Free";
+        };
+        String details = "Status: " + listing.getStatus().name().replace('_', ' ')
+                + "\nType: " + listing.getTypeDisplay()
+                + "\nCategory: " + listing.getCategory()
+                + "\nCondition: " + listing.getCondition()
+                + "\n" + priceOrDuration
+                + "\nMeet-up: " + listing.getMeetupLocation()
+                + "\nPhotos: " + listing.getPhotoPaths().size()
+                + "\n\n" + listing.getDescription()
+                + (listing.getRejectionReason() == null ? "" : "\n\nAdmin feedback: " + listing.getRejectionReason());
+        Dialog<ButtonType> dialog = new Dialog<>();
+        dialog.setTitle("Listing Details");
+        dialog.setHeaderText(listing.getTitle());
+        dialog.setResizable(true);
+
+        VBox body = new VBox(12);
+        body.setPadding(new Insets(12));
+        Label fields = new Label(details);
+        fields.setWrapText(true);
+        body.getChildren().addAll(fields,
+                new Label("Photos — select a photo to view it at full size"),
+                createPhotoGallery(listing.getPhotoPaths()));
+
+        ScrollPane scroll = new ScrollPane(body);
+        scroll.setFitToWidth(true);
+        scroll.setPrefViewportWidth(720);
+        scroll.setPrefViewportHeight(520);
+        dialog.getDialogPane().setContent(scroll);
+        dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+        dialog.showAndWait();
+    }
+
+    private FlowPane createPhotoGallery(List<String> paths) {
+        FlowPane gallery = new FlowPane(10, 10);
+        gallery.setPrefWrapLength(680);
+        if (paths.isEmpty()) gallery.getChildren().add(new Label("No photos supplied."));
+        for (int index = 0; index < paths.size(); index++) {
+            String path = paths.get(index);
+            try {
+                String uri = path.startsWith("file:")
+                        ? path : Path.of(path).toAbsolutePath().toUri().toString();
+                Image image = new Image(uri, false);
+                if (image.isError()) throw new IllegalArgumentException("Photo could not be opened.");
+                ImageView preview = new ImageView(image);
+                preview.setPreserveRatio(true);
+                preview.setFitWidth(300);
+                preview.setFitHeight(230);
+                Button photo = new Button("Photo " + (index + 1), preview);
+                photo.setContentDisplay(ContentDisplay.TOP);
+                photo.setOnAction(event -> {
+                    Dialog<ButtonType> fullPhoto = new Dialog<>();
+                    fullPhoto.setTitle("Listing Photo");
+                    fullPhoto.setResizable(true);
+                    ImageView enlargedImage = new ImageView(image);
+                    enlargedImage.setPreserveRatio(true);
+                    enlargedImage.setSmooth(true);
+                    enlargedImage.setFitWidth(900);
+                    enlargedImage.setFitHeight(650);
+                    fullPhoto.getDialogPane().setContent(enlargedImage);
+                    fullPhoto.getDialogPane().setPrefSize(940, 720);
+                    fullPhoto.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+                    fullPhoto.showAndWait();
+                });
+                gallery.getChildren().add(photo);
+            } catch (IllegalArgumentException ex) {
+                gallery.getChildren().add(new Label("Photo " + (index + 1) + " unavailable."));
+            }
+        }
+        return gallery;
+    }
+
+    private void refreshPhotoSelection(List<Path> selectedPhotos, VBox photoList, Label photoNote, boolean editing) {
+        photoNote.setText((editing ? "Replacement photos: " : "Photos: ")
+                + selectedPhotos.size() + " / 6");
         photoList.getChildren().clear();
         for (Path photo : selectedPhotos) {
             HBox row = new HBox(8);
@@ -290,7 +444,7 @@ public class SellerDashboardController {
             remove.getStyleClass().addAll("btn-outline", "btn-sm");
             remove.setOnAction(e -> {
                 selectedPhotos.remove(photo);
-                refreshPhotoSelection(selectedPhotos, photoList, photoNote);
+                refreshPhotoSelection(selectedPhotos, photoList, photoNote, editing);
             });
             row.getChildren().addAll(fileName, remove);
             photoList.getChildren().add(row);

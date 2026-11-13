@@ -201,6 +201,31 @@ public class DataService {
         if (photos.size() > 6) {
             throw new IllegalArgumentException("A listing cannot have more than 6 photos.");
         }
+        validateListingDetails(listing);
+        listing.setStatus(ListingStatus.PENDING_REVIEW);
+        DatabaseManager.submitListing(listing, sellerUsername, List.copyOf(photos));
+    }
+
+    public static void updateSellerListing(Listing listing, List<Path> photos, boolean replacePhotos) {
+        String sellerUsername = requireSeller();
+        if (listing == null || listing.getId() == null || photos == null) {
+            throw new IllegalArgumentException("A listing, its ID, and photos are required.");
+        }
+        if (photos.size() > 6) {
+            throw new IllegalArgumentException("A listing cannot have more than 6 photos.");
+        }
+        validateListingDetails(listing);
+        listing.setTitle(listing.getTitle().trim());
+        listing.setDescription(listing.getDescription().trim());
+        DatabaseManager.updateSellerListing(listing, sellerUsername, List.copyOf(photos), replacePhotos);
+    }
+
+    public static void deleteSellerListing(String listingId, long expectedVersion) {
+        String sellerUsername = requireSeller();
+        DatabaseManager.deleteSellerListing(listingId, sellerUsername, expectedVersion);
+    }
+
+    private static void validateListingDetails(Listing listing) {
         if (listing.getType() == null
                 || listing.getTitle() == null || listing.getTitle().isBlank()
                 || listing.getCategory() == null || !CATEGORIES.contains(listing.getCategory())
@@ -228,11 +253,8 @@ public class DataService {
                 listing.setLendingDays(null);
             }
         }
-
         listing.setTitle(listing.getTitle().trim());
         listing.setDescription(listing.getDescription().trim());
-        listing.setStatus(ListingStatus.PENDING_REVIEW);
-        DatabaseManager.submitListing(listing, sellerUsername, List.copyOf(photos));
     }
 
     private static String requireSeller() {

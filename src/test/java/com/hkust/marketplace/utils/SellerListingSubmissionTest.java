@@ -15,6 +15,8 @@ import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.util.List;
 import java.util.Map;
 
@@ -135,6 +137,75 @@ public class SellerListingSubmissionTest {
         }
         assertTrue(DatabaseManager.fetchRows("listings", Map.of()).isEmpty());
         assertTrue(DatabaseManager.fetchRows("notifications", Map.of()).isEmpty());
+    }
+
+    @Test
+    public void editingLiveListingResetsReviewStateAndNotifiesAdmin() {
+        Listing original = listing(ListingType.SELL);
+        original.setPrice(20.0);
+        DataService.submitListing(original, List.of());
+
+        SessionManager.login(new User("admin", "Test Admin", "unused", UserRole.ADMIN));
+        Listing pending = DataService.getPendingListings().get(0);
+        DataService.approveListing(pending.getId(), pending.getReviewVersion());
+        SessionManager.login(new User("seller", "Test Seller", "unused", UserRole.SELLER));
+
+        Listing edited = DataService.getSellerListings().get(0);
+        edited.setTitle("Updated listing title");
+        edited.setPrice(15.0);
+        DataService.updateSellerListing(edited, List.of(), false);
+
+        Map<String, Object> row = DatabaseManager.fetchRow("listings", "listing_id",
+                Integer.parseInt(edited.getId()));
+        assertEquals("Updated listing title", row.get("item_name"));
+        assertEquals("PENDING_REVIEW", row.get("listing_status"));
+        assertEquals(-1, ((Number) row.get("approved")).intValue());
+        assertNull(row.get("posted_date"));
+        assertNull(row.get("reviewed_at"));
+        assertEquals(15.0, ((Number) row.get("price")).doubleValue(), 0.001);
+        assertEquals(ListingStatus.PENDING_REVIEW, edited.getStatus());
+
+        List<Map<String, Object>> notifications = DatabaseManager.fetchRows("notifications", Map.of());
+        assertEquals(3, notifications.size());
+        assertTrue(notifications.stream().anyMatch(notification ->
+                "Listing Updated - Review Required".equals(notification.get("title"))));
+    }
+
+    @Test
+    public void deletingListingRemovesItAndItsFavourites() throws Exception {
+        DatabaseManager.createUser("buyer", "Test Buyer", "unused", UserRole.BUYER.name(), null, null, null);
+        Listing listing = listing(ListingType.GIVEAWAY);
+        DataService.submitListing(listing, List.of());
+        try (Connection connection = DatabaseManager.connect();
+             PreparedStatement statement = connection.prepareStatement(
+                     "INSERT INTO favourites (buyer_username, listing_id) VALUES (?, ?)")) {
+            statement.setString(1, "buyer");
+            statement.setInt(2, Integer.parseInt(listing.getId()));
+            statement.executeUpdate();
+        }
+
+        DataService.deleteSellerListing(listing.getId(), listing.getReviewVersion());
+
+        assertNull(DatabaseManager.fetchRow("listings", "listing_id", Integer.parseInt(listing.getId())));
+        assertTrue(DatabaseManager.fetchRows("favourites", Map.of()).isEmpty());
+        assertTrue(DataService.getSellerListings().isEmpty());
+    }
+
+    @Test
+    public void staleListingEditIsRejectedWithoutChangingTheListing() {
+        Listing listing = listing(ListingType.SELL);
+        listing.setPrice(20.0);
+        DataService.submitListing(listing, List.of());
+        listing.setReviewVersion(listing.getReviewVersion() + 1);
+        listing.setTitle("Stale edit");
+
+        assertThrows(IllegalStateException.class,
+                () -> DataService.updateSellerListing(listing, List.of(), false));
+
+        Map<String, Object> row = DatabaseManager.fetchRow("listings", "listing_id",
+                Integer.parseInt(listing.getId()));
+        assertEquals("Pending review item", row.get("item_name"));
+        assertEquals(1, DatabaseManager.fetchRows("notifications", Map.of()).size());
     }
 
     private Listing listing(ListingType type) {

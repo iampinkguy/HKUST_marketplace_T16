@@ -612,6 +612,234 @@ public class DatabaseManager {
         }
     }
 
+    /** Updates a seller-owned listing and sends it back through admin review atomically. */
+    public static void updateSellerListing(Listing listing, String sellerUsername,
+                                           List<Path> photos, boolean replacePhotos) {
+        if (listing == null || sellerUsername == null || sellerUsername.isBlank() || photos == null) {
+            throw new IllegalArgumentException("Listing, seller, and photos are required.");
+        }
+        if (photos.size() > 6) {
+            throw new IllegalArgumentException("A listing cannot have more than 6 photos.");
+        }
+
+        int listingId = parseListingId(listing.getId());
+        List<Path> storedPhotos = new ArrayList<>();
+        List<String> oldPhotos = new ArrayList<>();
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            try {
+                String canonicalUsername;
+                String sellerName;
+                String[] photoNames = new String[6];
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        SELECT l.seller_username, l.photo1, l.photo2, l.photo3, l.photo4, l.photo5, l.photo6,
+                            u.username AS account_username, u.full_name
+                        FROM listings l
+                        JOIN users u ON u.username = l.seller_username COLLATE NOCASE
+                            AND u.role = 'SELLER' AND u.active = 1
+                        WHERE l.listing_id = ? AND l.seller_username = ? COLLATE NOCASE
+                            AND l.review_version = ?
+                        """)) {
+                    statement.setInt(1, listingId);
+                    statement.setString(2, sellerUsername);
+                    statement.setLong(3, listing.getReviewVersion());
+                    try (ResultSet result = statement.executeQuery()) {
+                        if (!result.next()) {
+                            throw new IllegalStateException("This listing is no longer available or has changed. Refresh your listings and try again.");
+                        }
+                        canonicalUsername = result.getString("account_username");
+                        sellerName = result.getString("full_name");
+                        for (int i = 0; i < 6; i++) {
+                            String oldPhoto = result.getString("photo" + (i + 1));
+                            if (oldPhoto != null && !oldPhoto.isBlank()) oldPhotos.add(oldPhoto);
+                            photoNames[i] = replacePhotos ? null : oldPhoto;
+                        }
+                    }
+                }
+
+                if (replacePhotos) {
+                    for (int i = 0; i < photos.size(); i++) {
+                        Path source = photos.get(i);
+                        String fileName = source == null ? "" : source.getFileName().toString();
+                        int extensionIndex = fileName.lastIndexOf('.');
+                        String extension = extensionIndex < 0 ? "" : fileName.substring(extensionIndex).toLowerCase();
+                        if (source == null || !Files.isRegularFile(source)
+                                || !List.of(".jpg", ".jpeg", ".png", ".gif", ".bmp").contains(extension)
+                                || ImageIO.read(source.toFile()) == null) {
+                            throw new IllegalArgumentException("Choose a valid image file for each photo.");
+                        }
+                        String storedName = UUID.randomUUID() + extension;
+                        Path destination = UPLOADS_DIR.resolve(storedName).normalize();
+                        if (!destination.getParent().equals(UPLOADS_DIR)) {
+                            throw new IllegalArgumentException("Invalid photo path.");
+                        }
+                        Files.createDirectories(UPLOADS_DIR);
+                        Files.copy(source, destination);
+                        storedPhotos.add(destination);
+                        photoNames[i] = Path.of("uploads", storedName).toString().replace('\\', '/');
+                    }
+                }
+
+                LocalDateTime submittedAt = LocalDateTime.now();
+                String updateSql = """
+                        UPDATE listings SET item_name = ?, listing_type = ?, category = ?, item_condition = ?,
+                            listing_status = 'PENDING_REVIEW', price = ?, lending_days = ?, description = ?,
+                            numPhotos = ?, photo1 = ?, photo2 = ?, photo3 = ?, photo4 = ?, photo5 = ?, photo6 = ?,
+                            meetup_location = ?, posted_date = NULL, submitted_at = ?, availability_status = 'Available',
+                            approved = -1, reviewed_at = NULL, reviewed_by = NULL, rejection_reason = NULL
+                        WHERE listing_id = ? AND seller_username = ? COLLATE NOCASE AND review_version = ?
+                        """;
+                try (PreparedStatement statement = connection.prepareStatement(updateSql)) {
+                    statement.setString(1, listing.getTitle());
+                    statement.setString(2, listing.getType().name());
+                    statement.setString(3, listing.getCategory());
+                    statement.setString(4, listing.getCondition());
+                    statement.setObject(5, listing.getPrice());
+                    statement.setObject(6, listing.getLendingDays());
+                    statement.setString(7, listing.getDescription());
+                    statement.setInt(8, replacePhotos ? photos.size() : oldPhotos.size());
+                    for (int i = 0; i < 6; i++) statement.setString(9 + i, photoNames[i]);
+                    statement.setString(15, listing.getMeetupLocation());
+                    statement.setString(16, submittedAt.toString());
+                    statement.setInt(17, listingId);
+                    statement.setString(18, canonicalUsername);
+                    statement.setLong(19, listing.getReviewVersion());
+                    if (statement.executeUpdate() != 1) {
+                        throw new IllegalStateException("This listing is no longer available or has changed. Refresh your listings and try again.");
+                    }
+                }
+
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        INSERT INTO notifications (username, sender, title, message, category, timestamp)
+                        SELECT username, ?, 'Listing Updated - Review Required', ?, 'System', ?
+                        FROM users WHERE role = 'ADMIN' AND active = 1
+                        """)) {
+                    statement.setString(1, canonicalUsername);
+                    statement.setString(2, sellerName + " updated '" + listing.getTitle() + "' and it is awaiting re-approval.");
+                    statement.setString(3, submittedAt.toString());
+                    if (statement.executeUpdate() == 0) {
+                        throw new IllegalStateException("No active admin account is available to notify.");
+                    }
+                }
+
+                connection.commit();
+                listing.setSellerUsername(canonicalUsername);
+                listing.setSellerFullName(sellerName);
+                listing.setStatus(ListingStatus.PENDING_REVIEW);
+                listing.setSubmittedAt(submittedAt);
+                if (replacePhotos) {
+                    listing.setPhotoPaths(java.util.Arrays.stream(photoNames)
+                            .filter(name -> name != null).toList());
+                }
+            } catch (SQLException | IOException | RuntimeException e) {
+                try {
+                    connection.rollback();
+                } catch (SQLException rollbackError) {
+                    e.addSuppressed(rollbackError);
+                }
+                for (Path photo : storedPhotos) {
+                    try {
+                        Files.deleteIfExists(photo);
+                    } catch (IOException cleanupError) {
+                        e.addSuppressed(cleanupError);
+                    }
+                }
+                if (e instanceof RuntimeException runtimeException) throw runtimeException;
+                throw new IllegalStateException("Could not update listing.", e);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not update listing.", e);
+        }
+
+        if (replacePhotos) deleteStoredPhotos(oldPhotos, "updated");
+    }
+
+    /** Permanently removes a seller-owned listing and its saved favourites. */
+    public static void deleteSellerListing(String listingId, String sellerUsername, long expectedVersion) {
+        if (sellerUsername == null || sellerUsername.isBlank()) {
+            throw new IllegalArgumentException("A seller account is required.");
+        }
+        int id = parseListingId(listingId);
+        List<String> photos = new ArrayList<>();
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            try {
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        SELECT l.photo1, l.photo2, l.photo3, l.photo4, l.photo5, l.photo6
+                        FROM listings l
+                        JOIN users u ON u.username = l.seller_username COLLATE NOCASE
+                            AND u.role = 'SELLER' AND u.active = 1
+                        WHERE l.listing_id = ? AND l.seller_username = ? COLLATE NOCASE
+                            AND l.review_version = ?
+                        """)) {
+                    statement.setInt(1, id);
+                    statement.setString(2, sellerUsername);
+                    statement.setLong(3, expectedVersion);
+                    try (ResultSet result = statement.executeQuery()) {
+                        if (!result.next()) {
+                            throw new IllegalStateException("This listing is no longer available or has changed. Refresh your listings and try again.");
+                        }
+                        for (int i = 1; i <= 6; i++) {
+                            String photo = result.getString("photo" + i);
+                            if (photo != null && !photo.isBlank()) photos.add(photo);
+                        }
+                    }
+                }
+                try (PreparedStatement statement = connection.prepareStatement(
+                        "DELETE FROM favourites WHERE listing_id = ?")) {
+                    statement.setInt(1, id);
+                    statement.executeUpdate();
+                }
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        DELETE FROM listings WHERE listing_id = ? AND seller_username = ? COLLATE NOCASE
+                            AND review_version = ?
+                        """)) {
+                    statement.setInt(1, id);
+                    statement.setString(2, sellerUsername);
+                    statement.setLong(3, expectedVersion);
+                    if (statement.executeUpdate() != 1) {
+                        throw new IllegalStateException("This listing is no longer available or has changed. Refresh your listings and try again.");
+                    }
+                }
+                connection.commit();
+            } catch (SQLException | RuntimeException e) {
+                try {
+                    connection.rollback();
+                } catch (SQLException rollbackError) {
+                    e.addSuppressed(rollbackError);
+                }
+                if (e instanceof RuntimeException runtimeException) throw runtimeException;
+                throw new IllegalStateException("Could not delete listing.", e);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not delete listing.", e);
+        }
+        deleteStoredPhotos(photos, "deleted");
+    }
+
+    private static void deleteStoredPhotos(List<String> storedPhotoPaths, String completedAction) {
+        for (String storedPhoto : storedPhotoPaths) {
+            Path photo = Path.of(storedPhoto).toAbsolutePath().normalize();
+            if (!photo.getParent().equals(UPLOADS_DIR)) continue;
+            try {
+                Files.deleteIfExists(photo);
+            } catch (IOException e) {
+                throw new IllegalStateException("Listing was " + completedAction
+                        + ", but an old photo could not be removed: " + storedPhoto, e);
+            }
+        }
+    }
+
+    private static int parseListingId(String listingId) {
+        try {
+            int id = Integer.parseInt(listingId);
+            if (id > 0) return id;
+        } catch (NumberFormatException ignored) {
+            // Listing IDs in SQLite are positive integers.
+        }
+        throw new IllegalArgumentException("A valid listing ID is required.");
+    }
+
     /** Saves a pending review and its feedback/notification atomically. */
     static void reviewListing(int listingId, String adminUsername, boolean approved, String reason, long expectedVersion) {
         try (Connection connection = connect()) {
