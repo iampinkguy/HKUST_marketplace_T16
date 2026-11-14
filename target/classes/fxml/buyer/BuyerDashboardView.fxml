@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.image.Image?>
+<?import javafx.scene.image.ImageView?>
+<?import javafx.scene.layout.*?>
+
+<BorderPane xmlns:fx="http://javafx.com/fxml"
+            fx:controller="com.hkust.marketplace.controllers.buyer.BuyerDashboardController"
+            prefWidth="1200" prefHeight="780">
+
+    <left>
+        <VBox styleClass="sidebar" spacing="0">
+            <padding>
+                <Insets top="20" bottom="20"/>
+            </padding>
+
+            <HBox alignment="CENTER" spacing="10" style="-fx-padding: 0 0 24 0;">
+                <ImageView fitHeight="40" fitWidth="26" preserveRatio="true">
+                    <image>
+                        <Image url="@../../images/hkust_logo.png"/>
+                    </image>
+                </ImageView>
+                <VBox>
+                    <Label text="HKUST" style="-fx-text-fill: white; -fx-font-weight: bold; -fx-font-size: 14px;"/>
+                    <Label text="Marketplace" style="-fx-text-fill: #A68137; -fx-font-size: 12px;"/>
+                </VBox>
+            </HBox>
+
+            <Button fx:id="btnBrowse" text="  Browse Marketplace" styleClass="sidebar-btn, sidebar-btn-active"
+                    onAction="#showBrowse" maxWidth="Infinity" alignment="CENTER_LEFT"/>
+            <Button fx:id="btnDeals" text="  My Deals" styleClass="sidebar-btn"
+                    onAction="#showMyDeals" maxWidth="Infinity" alignment="CENTER_LEFT"/>
+            <Button fx:id="btnHistory" text="  Deal History" styleClass="sidebar-btn"
+                    onAction="#showHistory" maxWidth="Infinity" alignment="CENTER_LEFT"/>
+            <Button fx:id="btnFavourites" text="  Favourites" styleClass="sidebar-btn"
+                    onAction="#showFavourites" maxWidth="Infinity" alignment="CENTER_LEFT"/>
+            <Button fx:id="btnNotifications" text="  Notifications" styleClass="sidebar-btn"
+                    onAction="#showNotifications" maxWidth="Infinity" alignment="CENTER_LEFT"/>
+            <Button fx:id="btnProfile" text="  My Profile" styleClass="sidebar-btn"
+                    onAction="#showProfile" maxWidth="Infinity" alignment="CENTER_LEFT"/>
+
+            <Region VBox.vgrow="ALWAYS"/>
+
+            <Button text="  Logout" styleClass="sidebar-btn" onAction="#logout"
+                    maxWidth="Infinity" alignment="CENTER_LEFT"/>
+        </VBox>
+    </left>
+
+    <center>
+        <VBox spacing="0">
+            <HBox styleClass="top-bar" alignment="CENTER_LEFT" spacing="12">
+                <Label fx:id="pageTitle" text="Browse Marketplace" styleClass="section-title"/>
+                <Region HBox.hgrow="ALWAYS"/>
+                <Label fx:id="welcomeLabel" text="" style="-fx-text-fill: #5a5a7a;"/>
+            </HBox>
+            <StackPane fx:id="contentPane" VBox.vgrow="ALWAYS" style="-fx-padding: 20; -fx-background-color: #f5f7fa;"/>
+        </VBox>
+    </center>
+</BorderPane>

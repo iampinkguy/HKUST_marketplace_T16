@@ -47,7 +47,9 @@
                 <Label fx:id="successLabel" text="" style="-fx-text-fill: #2e7d32; -fx-font-size: 13px;"
                        wrapText="true" managed="false" visible="false"/>
 
-                <Button text="Create Account" styleClass="btn-primary" onAction="#handleRegister"
+                <Label text="Password rules: at least 8 characters, with an uppercase letter, a lowercase letter, and a digit."
+                       wrapText="true" style="-fx-text-fill: #5a5a7a; -fx-font-size: 12px;"/>
+                <Button text="Confirm" styleClass="btn-primary" onAction="#handleRegister"
                         prefWidth="Infinity" prefHeight="42"/>
 
                 <HBox alignment="CENTER" spacing="6">
