@@ -12,28 +12,37 @@
     "seen_seller": false
   },
   "1": {
-    "messages": [
-      {
-        "timestamp": "2026-11-12T17:18:20.365067",
-        "user": "aha",
-        "role": "buyer",
-        "content": "asdf"
+    "conversations": {
+      "aha": {
+        "messages": [],
+        "seen_buyer": false,
+        "seen_seller": true
       },
-      {
-        "timestamp": "2026-11-12T17:30:49.966835700",
-        "user": "aha",
-        "role": "buyer",
-        "content": "hihi"
-      },
-      {
-        "timestamp": "2026-11-12T17:31:15.429733500",
-        "user": "aha",
-        "role": "buyer",
-        "content": "ohno"
+      "alice": {
+        "messages": [
+          {
+            "timestamp": "2026-11-14T19:59:15.792663300",
+            "user": "alice",
+            "role": "buyer",
+            "content": "hi"
+          },
+          {
+            "timestamp": "2026-11-14T19:59:19.122744800",
+            "user": "alice",
+            "role": "buyer",
+            "content": "[Formal offer] Proposed price: HK$150"
+          },
+          {
+            "timestamp": "2026-11-14T21:33:35.292846400",
+            "user": "charlie",
+            "role": "seller",
+            "content": "huh"
+          }
+        ],
+        "seen_buyer": true,
+        "seen_seller": true
       }
-    ],
-    "seen_buyer": true,
-    "seen_seller": false
+    }
   },
   "3": {
     "messages": [

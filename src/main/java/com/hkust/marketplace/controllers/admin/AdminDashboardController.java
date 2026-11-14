@@ -2,7 +2,6 @@ package com.hkust.marketplace.controllers.admin;
 
 import com.hkust.marketplace.models.*;
 import com.hkust.marketplace.utils.DataService;
-import com.hkust.marketplace.utils.DummyDataService;
 import com.hkust.marketplace.utils.SceneManager;
 import com.hkust.marketplace.utils.SessionManager;
 import javafx.collections.FXCollections;
@@ -296,7 +295,16 @@ public class AdminDashboardController {
                 "Admin can create a listing on behalf of a seller here.\nSame form fields as Seller Create Listing.\n(UI placeholder)").showAndWait());
         root.getChildren().add(addBtn);
 
-        for (Listing l : DummyDataService.getInstance().getAllListings()) {
+        List<Listing> listings;
+        try {
+            listings = DataService.getAllListings();
+        } catch (IllegalStateException | SecurityException ex) {
+            root.getChildren().add(new Label("Could not load listings: " + ex.getMessage()));
+            contentPane.getChildren().add(new ScrollPane(root));
+            return;
+        }
+        if (listings.isEmpty()) root.getChildren().add(new Label("No listings stored."));
+        for (Listing l : listings) {
             HBox row = new HBox(12);
             row.getStyleClass().add("card");
             row.setAlignment(Pos.CENTER_LEFT);
@@ -320,8 +328,12 @@ public class AdminDashboardController {
                 Alert conf = new Alert(Alert.AlertType.CONFIRMATION, "Permanently remove this listing?");
                 conf.showAndWait().ifPresent(r -> {
                     if (r == ButtonType.OK) {
-                        DummyDataService.getInstance().removeListing(l.getId());
-                        showAllListings();
+                        try {
+                            DataService.removeListing(l.getId());
+                            showAllListings();
+                        } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+                            new Alert(Alert.AlertType.ERROR, ex.getMessage()).showAndWait();
+                        }
                     }
                 });
             });
@@ -342,7 +354,15 @@ public class AdminDashboardController {
         VBox root = new VBox(12);
         root.setPadding(new Insets(4));
 
-        for (User u : DummyDataService.getInstance().getAllUsers()) {
+        List<User> users;
+        try {
+            users = DataService.getAllUsers();
+        } catch (IllegalStateException | SecurityException ex) {
+            root.getChildren().add(new Label("Could not load users: " + ex.getMessage()));
+            contentPane.getChildren().add(root);
+            return;
+        }
+        for (User u : users) {
             if (u.getRole() == UserRole.ADMIN) continue;
 
             HBox row = new HBox(12);
@@ -365,8 +385,12 @@ public class AdminDashboardController {
             Button toggle = new Button(u.isActive() ? "Deactivate" : "Activate");
             toggle.getStyleClass().addAll(u.isActive() ? "btn-danger" : "btn-success", "btn-sm");
             toggle.setOnAction(e -> {
-                u.setActive(!u.isActive());
-                showUsers();
+                try {
+                    DataService.setUserActive(u.getUsername(), !u.isActive());
+                    showUsers();
+                } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+                    new Alert(Alert.AlertType.ERROR, ex.getMessage()).showAndWait();
+                }
             });
 
             Button delete = new Button("Delete");
@@ -376,9 +400,13 @@ public class AdminDashboardController {
                         "Permanently delete user @" + u.getUsername() + "?");
                 conf.showAndWait().ifPresent(r -> {
                     if (r == ButtonType.OK) {
-                        u.setActive(false);
-                        new Alert(Alert.AlertType.INFORMATION, "User deactivated (demo safety).").showAndWait();
-                        showUsers();
+                        try {
+                            DataService.setUserActive(u.getUsername(), false);
+                            new Alert(Alert.AlertType.INFORMATION, "User deactivated.").showAndWait();
+                            showUsers();
+                        } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+                            new Alert(Alert.AlertType.ERROR, ex.getMessage()).showAndWait();
+                        }
                     }
                 });
             });
@@ -442,7 +470,16 @@ public class AdminDashboardController {
         filters.getChildren().addAll(userFilter, scoreFilter);
         root.getChildren().add(filters);
 
-        for (Review r : DummyDataService.getInstance().getAllReviews()) {
+        List<Review> reviews;
+        try {
+            reviews = DataService.getAllReviews();
+        } catch (IllegalStateException | SecurityException ex) {
+            root.getChildren().add(new Label("Could not load reviews: " + ex.getMessage()));
+            contentPane.getChildren().add(new ScrollPane(root));
+            return;
+        }
+        if (reviews.isEmpty()) root.getChildren().add(new Label("No reviews stored."));
+        for (Review r : reviews) {
             HBox row = new HBox(12);
             row.getStyleClass().add("card");
             row.setAlignment(Pos.CENTER_LEFT);
@@ -461,8 +498,12 @@ public class AdminDashboardController {
             Button hide = new Button(r.isHidden() ? "Unhide" : "Hide");
             hide.getStyleClass().addAll("btn-outline", "btn-sm");
             hide.setOnAction(e -> {
-                r.setHidden(!r.isHidden());
-                showRatings();
+                try {
+                    DataService.setReviewHidden(r.getBuyerUsername(), r.getId(), !r.isHidden());
+                    showRatings();
+                } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+                    new Alert(Alert.AlertType.ERROR, ex.getMessage()).showAndWait();
+                }
             });
             row.getChildren().addAll(info, hide);
             root.getChildren().add(row);
@@ -478,7 +519,15 @@ public class AdminDashboardController {
         contentPane.getChildren().clear();
         VBox root = new VBox(12);
         root.setPadding(new Insets(4));
-        List<Notification> notifs = DummyDataService.getInstance().getNotificationsFor("admin");
+        List<Notification> notifs;
+        try {
+            User admin = SessionManager.getCurrentUser();
+            notifs = admin == null ? List.of() : DataService.getNotificationsFor(admin.getUsername());
+        } catch (IllegalStateException | SecurityException ex) {
+            root.getChildren().add(new Label("Could not load notifications: " + ex.getMessage()));
+            contentPane.getChildren().add(new ScrollPane(root));
+            return;
+        }
         if (notifs.isEmpty()) {
             root.getChildren().add(new Label("No notifications."));
         } else {

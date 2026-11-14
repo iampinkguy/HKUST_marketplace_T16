@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.*;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -184,6 +185,43 @@ public class DatabaseManager {
             )
             """);
         migrateNotificationSchema();
+        migrateBuyerDealColumns();
+    }
+
+    /** Adds buyer deal, review, and report columns without rewriting seller or admin tables. */
+    private static void migrateBuyerDealColumns() {
+        addColumnIfMissing("listing_requests", "borrow_start", "TEXT");
+        addColumnIfMissing("listing_requests", "borrow_end", "TEXT");
+        addColumnIfMissing("listing_requests", "due_at", "TEXT");
+        addColumnIfMissing("listing_requests", "completed_at", "TEXT");
+        addColumnIfMissing("listing_requests", "returned_at", "TEXT");
+        addColumnIfMissing("listing_requests", "rated", "INTEGER NOT NULL DEFAULT 0");
+        addColumnIfMissing("reviews", "created_at", "TEXT");
+        addColumnIfMissing("reviews", "seller_reply", "TEXT");
+        addColumnIfMissing("reviews", "hidden", "INTEGER NOT NULL DEFAULT 0");
+        runSql("""
+                CREATE TABLE IF NOT EXISTS listing_reports (
+                    buyer_username TEXT NOT NULL,
+                    listing_id INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (buyer_username, listing_id)
+                )
+                """);
+    }
+
+    private static void addColumnIfMissing(String table, String column, String definition) {
+        try (Connection connection = connect();
+             PreparedStatement statement = connection.prepareStatement("PRAGMA table_info(" + table + ")");
+             ResultSet result = statement.executeQuery()) {
+            while (result.next()) {
+                if (column.equalsIgnoreCase(result.getString("name"))) {
+                    return;
+                }
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not inspect " + table + " schema", e);
+        }
+        runSql("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition);
     }
 
     private static void migrateListingSchema() {
@@ -1114,6 +1152,17 @@ public class DatabaseManager {
                     default -> "COUNTERED";
                 };
                 LocalDateTime now = LocalDateTime.now();
+                String dueAt = null;
+                if ("ACCEPT".equals(normalizedAction) && "LEND".equals(request.get("listing_type"))) {
+                    Object borrowEnd = request.get("borrow_end");
+                    if (borrowEnd != null && !borrowEnd.toString().isBlank()) {
+                        dueAt = borrowEnd.toString();
+                    } else {
+                        int days = request.get("proposed_days") == null
+                                ? 1 : Math.max(1, ((Number) request.get("proposed_days")).intValue());
+                        dueAt = now.plusDays(days).toString();
+                    }
+                }
 
                 if ("ACCEPT".equals(normalizedAction)) {
                     String listingStatus = switch ((String) request.get("listing_type")) {
@@ -1138,14 +1187,16 @@ public class DatabaseManager {
 
                 try (PreparedStatement update = connection.prepareStatement("""
                         UPDATE listing_requests
-                        SET status = ?, counter_price = ?, updated_at = ?
+                        SET status = ?, counter_price = ?, updated_at = ?, due_at = COALESCE(?, due_at)
                         WHERE request_id = ? AND status = 'PENDING'
                         """)) {
                     update.setString(1, newStatus);
                     if ("COUNTER".equals(normalizedAction)) update.setDouble(2, counterPrice);
                     else update.setNull(2, Types.REAL);
                     update.setString(3, now.toString());
-                    update.setInt(4, requestId);
+                    if (dueAt == null) update.setNull(4, Types.VARCHAR);
+                    else update.setString(4, dueAt);
+                    update.setInt(5, requestId);
                     if (update.executeUpdate() != 1) {
                         throw new IllegalStateException("This request is no longer pending.");
                     }
@@ -1163,6 +1214,10 @@ public class DatabaseManager {
                             + " at HK$" + counterPrice + ".";
                 };
                 insertNotification(connection, buyer, sellerUsername, title, message, "Offer");
+                if (dueAt != null) {
+                    insertNotification(connection, buyer, sellerUsername, "Borrow due-date reminder",
+                            "Return " + itemName + " by " + dueAt.replace('T', ' ') + ".", "Reminder");
+                }
 
                 if ("ACCEPT".equals(normalizedAction)) {
                     try (PreparedStatement updateOthers = connection.prepareStatement("""
@@ -1249,7 +1304,7 @@ public class DatabaseManager {
                                                               int requestId) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT r.request_id, r.buyer_username, r.listing_id, r.request_type, r.offer_price,
-                       r.proposed_days, r.status, l.item_name, l.listing_type
+                       r.proposed_days, r.borrow_end, r.status, l.item_name, l.listing_type
                 FROM listing_requests r JOIN listings l ON l.listing_id = r.listing_id
                 WHERE r.request_id = ? AND l.seller = ?
                 """)) {
@@ -1777,6 +1832,579 @@ public class DatabaseManager {
     private static void validateChatIdentity(String listingId, String buyerUsername) {
         if (listingId == null || listingId.isBlank() || buyerUsername == null || buyerUsername.isBlank()) {
             throw new IllegalArgumentException("Listing and buyer are required for a chat.");
+        }
+    }
+
+    /** Atomically gives the item to the first buyer whose claim commits. */
+    public static int claimGiveaway(String buyerUsername, int listingId) {
+        LocalDateTime now = LocalDateTime.now();
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            try {
+                String seller;
+                String itemName;
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        SELECT seller, item_name FROM listings
+                        WHERE listing_id = ? AND listing_type = 'GIVEAWAY'
+                            AND listing_status = 'LIVE' AND availability_status = 'Available'
+                        """)) {
+                    statement.setInt(1, listingId);
+                    try (ResultSet result = statement.executeQuery()) {
+                        if (!result.next()) {
+                            throw new IllegalStateException("This listing is no longer available.");
+                        }
+                        seller = result.getString("seller");
+                        itemName = result.getString("item_name");
+                    }
+                }
+                if (buyerUsername.equalsIgnoreCase(seller)) {
+                    throw new IllegalArgumentException("You cannot request your own listing.");
+                }
+                try (PreparedStatement update = connection.prepareStatement("""
+                        UPDATE listings SET listing_status = 'GIVEN', availability_status = 'Unavailable'
+                        WHERE listing_id = ? AND listing_type = 'GIVEAWAY'
+                            AND listing_status = 'LIVE' AND availability_status = 'Available'
+                        """)) {
+                    update.setInt(1, listingId);
+                    if (update.executeUpdate() != 1) {
+                        throw new IllegalStateException("This listing is no longer available.");
+                    }
+                }
+                int requestId;
+                try (PreparedStatement insert = connection.prepareStatement("""
+                        INSERT INTO listing_requests
+                            (buyer_username, listing_id, request_type, status, created_at, updated_at)
+                        VALUES (?, ?, 'CLAIM', 'ACCEPTED', ?, ?)
+                        """, Statement.RETURN_GENERATED_KEYS)) {
+                    insert.setString(1, buyerUsername);
+                    insert.setInt(2, listingId);
+                    insert.setString(3, now.toString());
+                    insert.setString(4, now.toString());
+                    insert.executeUpdate();
+                    try (ResultSet keys = insert.getGeneratedKeys()) {
+                        if (!keys.next()) throw new SQLException("Claim ID was not generated.");
+                        requestId = keys.getInt(1);
+                    }
+                }
+                try (PreparedStatement others = connection.prepareStatement("""
+                        UPDATE listing_requests SET status = 'DECLINED', updated_at = ?
+                        WHERE listing_id = ? AND request_id <> ? AND status = 'PENDING'
+                        """)) {
+                    others.setString(1, now.toString());
+                    others.setInt(2, listingId);
+                    others.setInt(3, requestId);
+                    others.executeUpdate();
+                }
+                insertNotification(connection, seller, buyerUsername, "Giveaway claimed",
+                        buyerUsername + " claimed " + itemName + ".", "Offer");
+                connection.commit();
+                return requestId;
+            } catch (RuntimeException | SQLException e) {
+                connection.rollback();
+                if (e instanceof RuntimeException runtimeException) throw runtimeException;
+                throw new IllegalStateException("Could not claim this giveaway.", e);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not claim this giveaway.", e);
+        }
+    }
+
+    public static int createBorrowRequest(String buyerUsername, int listingId,
+                                          LocalDateTime start, LocalDateTime end) {
+        if (start == null || end == null) {
+            throw new IllegalArgumentException("Choose a borrow start and end time.");
+        }
+        long seconds = Duration.between(start, end).getSeconds();
+        if (seconds < 5) {
+            throw new IllegalArgumentException("Borrowing period must be at least 5 seconds.");
+        }
+        if (start.isBefore(LocalDateTime.now().minusSeconds(2))) {
+            throw new IllegalArgumentException("Borrow start time cannot be in the past.");
+        }
+        int proposedDays = (int) Math.max(1, (seconds + 86_399) / 86_400);
+        LocalDateTime now = LocalDateTime.now();
+        String insertRequest = """
+                INSERT INTO listing_requests
+                    (buyer_username, listing_id, request_type, proposed_days, borrow_start, borrow_end,
+                     created_at, updated_at)
+                SELECT ?, l.listing_id, 'BORROW', ?, ?, ?, ?, ?
+                FROM listings l
+                WHERE l.listing_id = ? AND l.listing_status = 'LIVE'
+                    AND l.availability_status = 'Available' AND l.listing_type = 'LEND'
+                    AND l.seller <> ? COLLATE NOCASE
+                """;
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            try (PreparedStatement statement = connection.prepareStatement(
+                    insertRequest, Statement.RETURN_GENERATED_KEYS)) {
+                statement.setString(1, buyerUsername);
+                statement.setInt(2, proposedDays);
+                statement.setString(3, start.toString());
+                statement.setString(4, end.toString());
+                statement.setString(5, now.toString());
+                statement.setString(6, now.toString());
+                statement.setInt(7, listingId);
+                statement.setString(8, buyerUsername);
+                if (statement.executeUpdate() != 1) {
+                    throw new IllegalStateException("This listing is no longer available for requests.");
+                }
+                int requestId;
+                try (ResultSet keys = statement.getGeneratedKeys()) {
+                    if (!keys.next()) throw new SQLException("Request ID was not generated.");
+                    requestId = keys.getInt(1);
+                }
+                String seller = fetchString(connection, "SELECT seller FROM listings WHERE listing_id = ?", listingId);
+                String itemName = fetchString(connection, "SELECT item_name FROM listings WHERE listing_id = ?", listingId);
+                insertNotification(connection, seller, buyerUsername, "New borrow request",
+                        buyerUsername + " requested to borrow " + itemName + " from "
+                                + start.toString().replace('T', ' ') + " to "
+                                + end.toString().replace('T', ' ') + ".", "Offer");
+                connection.commit();
+                return requestId;
+            } catch (RuntimeException | SQLException e) {
+                connection.rollback();
+                throw e;
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not submit borrow request.", e);
+        }
+    }
+
+    public static void incrementListingViews(int listingId) {
+        try (Connection connection = connect();
+             PreparedStatement statement = connection.prepareStatement(
+                     "UPDATE listings SET views = views + 1 WHERE listing_id = ?")) {
+            statement.setInt(1, listingId);
+            if (statement.executeUpdate() != 1) {
+                throw new IllegalArgumentException("Listing was not found.");
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not update listing views.", e);
+        }
+    }
+
+    public static void reportListing(String buyerUsername, int listingId) {
+        String sql = """
+                INSERT INTO listing_reports (buyer_username, listing_id, created_at)
+                SELECT ?, listing_id, ?
+                FROM listings WHERE listing_id = ?
+                ON CONFLICT(buyer_username, listing_id) DO NOTHING
+                """;
+        try (Connection connection = connect();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, buyerUsername);
+            statement.setString(2, LocalDateTime.now().toString());
+            statement.setInt(3, listingId);
+            if (statement.executeUpdate() != 1 && !hasListingReport(buyerUsername, listingId)) {
+                throw new IllegalArgumentException("Listing was not found.");
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not report listing.", e);
+        }
+    }
+
+    public static boolean hasListingReport(String buyerUsername, int listingId) {
+        return !fetchQuery("""
+                SELECT 1 FROM listing_reports WHERE buyer_username = ? AND listing_id = ?
+                """, buyerUsername, listingId).isEmpty();
+    }
+
+    public static List<Integer> fetchReportedListingIds(String buyerUsername) {
+        List<Integer> ids = new ArrayList<>();
+        for (Map<String, Object> row : fetchQuery(
+                "SELECT listing_id FROM listing_reports WHERE buyer_username = ?", buyerUsername)) {
+            ids.add(((Number) row.get("listing_id")).intValue());
+        }
+        return ids;
+    }
+
+    public static List<Map<String, Object>> fetchBuyerDeals(String buyerUsername) {
+        return fetchQuery("""
+                SELECT r.request_id, r.buyer_username, r.listing_id, r.request_type, r.offer_price,
+                       r.proposed_days, r.status, r.counter_price, r.created_at, r.updated_at,
+                       r.borrow_start, r.borrow_end, r.due_at, r.completed_at, r.returned_at, r.rated,
+                       l.item_name, l.listing_type, l.listing_status, l.category, l.seller,
+                       l.availability_status, l.review_version, seller.full_name AS seller_name
+                FROM listing_requests r
+                LEFT JOIN listings l ON l.listing_id = r.listing_id
+                LEFT JOIN users seller ON seller.username = l.seller
+                WHERE r.buyer_username = ?
+                ORDER BY COALESCE(r.completed_at, r.returned_at, r.updated_at, r.created_at) DESC
+                """, buyerUsername);
+    }
+
+    /** Returns how many borrowed items were returned because their due time passed. */
+    public static int settleExpiredBorrows(String buyerUsername) {
+        List<Map<String, Object>> due = fetchQuery("""
+                SELECT r.request_id
+                FROM listing_requests r
+                WHERE r.buyer_username = ? AND r.request_type = 'BORROW' AND r.status = 'ACCEPTED'
+                    AND r.returned_at IS NULL AND r.due_at IS NOT NULL AND r.due_at <= ?
+                """, buyerUsername, LocalDateTime.now().toString());
+        int returned = 0;
+        for (Map<String, Object> row : due) {
+            returnBorrow(buyerUsername, ((Number) row.get("request_id")).intValue(), true);
+            returned++;
+        }
+        return returned;
+    }
+
+    public static void returnBorrow(String buyerUsername, int requestId, boolean automatic) {
+        LocalDateTime now = LocalDateTime.now();
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            try {
+                Map<String, Object> request;
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        SELECT r.request_id, r.listing_id, r.status, r.due_at, r.returned_at, l.item_name, l.seller,
+                               l.listing_status
+                        FROM listing_requests r
+                        LEFT JOIN listings l ON l.listing_id = r.listing_id
+                        WHERE r.request_id = ? AND r.buyer_username = ? AND r.request_type = 'BORROW'
+                        """)) {
+                    statement.setInt(1, requestId);
+                    statement.setString(2, buyerUsername);
+                    try (ResultSet result = statement.executeQuery()) {
+                        request = result.next() ? resultSetToMap(result) : null;
+                    }
+                }
+                if (request == null || !"ACCEPTED".equals(request.get("status")) || request.get("returned_at") != null) {
+                    throw new IllegalStateException("This borrowed item cannot be returned.");
+                }
+                String dueAt = (String) request.get("due_at");
+                boolean pastDue = dueAt != null && !LocalDateTime.parse(dueAt).isAfter(now);
+                if (!automatic && pastDue) {
+                    throw new IllegalStateException("The borrowing period has ended and the item is returned automatically.");
+                }
+                if (automatic && !pastDue) {
+                    connection.rollback();
+                    return;
+                }
+                try (PreparedStatement update = connection.prepareStatement("""
+                        UPDATE listing_requests
+                        SET returned_at = ?, completed_at = ?, updated_at = ?
+                        WHERE request_id = ? AND returned_at IS NULL
+                        """)) {
+                    update.setString(1, now.toString());
+                    update.setString(2, now.toString());
+                    update.setString(3, now.toString());
+                    update.setInt(4, requestId);
+                    if (update.executeUpdate() != 1) {
+                        throw new IllegalStateException("This borrowed item cannot be returned.");
+                    }
+                }
+                if (request.get("listing_id") != null && "LENT".equals(request.get("listing_status"))) {
+                    try (PreparedStatement update = connection.prepareStatement("""
+                            UPDATE listings SET listing_status = 'LIVE', availability_status = 'Available'
+                            WHERE listing_id = ? AND listing_status = 'LENT'
+                            """)) {
+                        update.setInt(1, ((Number) request.get("listing_id")).intValue());
+                        update.executeUpdate();
+                    }
+                }
+                String itemName = request.get("item_name") == null ? "your borrowed item" : (String) request.get("item_name");
+                String seller = (String) request.get("seller");
+                if (seller != null) {
+                    insertNotification(connection, seller, buyerUsername,
+                            automatic ? "Borrowed item auto-returned" : "Borrowed item returned",
+                            itemName + (automatic
+                                    ? " was automatically returned because the borrowing period ended."
+                                    : " was returned by the borrower."),
+                            "System");
+                }
+                if (automatic) {
+                    insertNotification(connection, buyerUsername, seller, "Borrow period ended",
+                            itemName + " was automatically returned because the due time passed.", "Reminder");
+                }
+                connection.commit();
+            } catch (RuntimeException | SQLException e) {
+                connection.rollback();
+                if (e instanceof RuntimeException runtimeException) throw runtimeException;
+                throw new IllegalStateException("Could not return the borrowed item.", e);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not return the borrowed item.", e);
+        }
+    }
+
+    public static void completeBuyerDeal(String buyerUsername, int requestId) {
+        LocalDateTime now = LocalDateTime.now();
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            try {
+                Map<String, Object> request;
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        SELECT r.request_id, r.listing_id, r.request_type, r.status, r.completed_at, r.returned_at,
+                               l.item_name, l.seller, l.listing_type, l.listing_status
+                        FROM listing_requests r
+                        LEFT JOIN listings l ON l.listing_id = r.listing_id
+                        WHERE r.request_id = ? AND r.buyer_username = ?
+                        """)) {
+                    statement.setInt(1, requestId);
+                    statement.setString(2, buyerUsername);
+                    try (ResultSet result = statement.executeQuery()) {
+                        request = result.next() ? resultSetToMap(result) : null;
+                    }
+                }
+                if (request == null || !"ACCEPTED".equals(request.get("status"))
+                        || request.get("completed_at") != null || request.get("returned_at") != null) {
+                    throw new IllegalStateException("This deal cannot be marked complete.");
+                }
+                String type = (String) request.get("request_type");
+                if (!"OFFER".equals(type) && !"CLAIM".equals(type)) {
+                    throw new IllegalStateException("Borrowed items are completed by returning them.");
+                }
+                try (PreparedStatement update = connection.prepareStatement("""
+                        UPDATE listing_requests SET completed_at = ?, updated_at = ?
+                        WHERE request_id = ? AND completed_at IS NULL AND returned_at IS NULL
+                        """)) {
+                    update.setString(1, now.toString());
+                    update.setString(2, now.toString());
+                    update.setInt(3, requestId);
+                    if (update.executeUpdate() != 1) {
+                        throw new IllegalStateException("This deal cannot be marked complete.");
+                    }
+                }
+                if (request.get("listing_id") != null && "SELL".equals(request.get("listing_type"))
+                        && "RESERVED".equals(request.get("listing_status"))) {
+                    try (PreparedStatement update = connection.prepareStatement("""
+                            UPDATE listings SET listing_status = 'SOLD'
+                            WHERE listing_id = ? AND listing_status = 'RESERVED'
+                            """)) {
+                        update.setInt(1, ((Number) request.get("listing_id")).intValue());
+                        update.executeUpdate();
+                    }
+                }
+                String seller = (String) request.get("seller");
+                String itemName = request.get("item_name") == null ? "the item" : (String) request.get("item_name");
+                if (seller != null) {
+                    insertNotification(connection, seller, buyerUsername, "Deal completed",
+                            buyerUsername + " marked the deal for " + itemName + " as complete.", "System");
+                }
+                connection.commit();
+            } catch (RuntimeException | SQLException e) {
+                connection.rollback();
+                if (e instanceof RuntimeException runtimeException) throw runtimeException;
+                throw new IllegalStateException("Could not complete the deal.", e);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not complete the deal.", e);
+        }
+    }
+
+    public static void createBuyerReview(String buyerUsername, int requestId, double rating, String text) {
+        if (rating < 0.0 || rating > 5.0 || !Double.isFinite(rating)) {
+            throw new IllegalArgumentException("Rating must be between 0.0 and 5.0.");
+        }
+        String comment = text == null ? "" : text.trim();
+        if (comment.length() > 1000) {
+            throw new IllegalArgumentException("Review text must be 1000 characters or fewer.");
+        }
+        LocalDateTime now = LocalDateTime.now();
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            try {
+                int listingId;
+                String seller;
+                String itemName;
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        SELECT r.listing_id, r.rated, r.completed_at, r.returned_at, l.seller, l.item_name
+                        FROM listing_requests r
+                        JOIN listings l ON l.listing_id = r.listing_id
+                        WHERE r.request_id = ? AND r.buyer_username = ? AND r.status = 'ACCEPTED'
+                        """)) {
+                    statement.setInt(1, requestId);
+                    statement.setString(2, buyerUsername);
+                    try (ResultSet result = statement.executeQuery()) {
+                        if (!result.next()) {
+                            throw new IllegalStateException("Only a completed deal can be rated.");
+                        }
+                        if (result.getString("completed_at") == null && result.getString("returned_at") == null) {
+                            throw new IllegalStateException("Only a completed deal can be rated.");
+                        }
+                        if (result.getInt("rated") != 0) {
+                            throw new IllegalStateException("This deal has already been rated.");
+                        }
+                        listingId = result.getInt("listing_id");
+                        seller = result.getString("seller");
+                        itemName = result.getString("item_name");
+                    }
+                }
+                try (PreparedStatement insert = connection.prepareStatement("""
+                        INSERT INTO reviews (buyer_username, listing_id, rating, text, created_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        """)) {
+                    insert.setString(1, buyerUsername);
+                    insert.setInt(2, listingId);
+                    insert.setDouble(3, rating);
+                    insert.setString(4, comment.isEmpty() ? null : comment);
+                    insert.setString(5, now.toString());
+                    insert.executeUpdate();
+                }
+                try (PreparedStatement update = connection.prepareStatement(
+                        "UPDATE listing_requests SET rated = 1, updated_at = ? WHERE request_id = ? AND rated = 0")) {
+                    update.setString(1, now.toString());
+                    update.setInt(2, requestId);
+                    if (update.executeUpdate() != 1) {
+                        throw new IllegalStateException("This deal has already been rated.");
+                    }
+                }
+                try (PreparedStatement ratingUpdate = connection.prepareStatement("""
+                        UPDATE users SET
+                            average_rating = COALESCE((
+                                SELECT AVG(r.rating) FROM reviews r
+                                JOIN listings l ON l.listing_id = r.listing_id
+                                WHERE l.seller = users.username OR l.seller_username = users.username
+                            ), 0),
+                            rating_count = (
+                                SELECT COUNT(*) FROM reviews r
+                                JOIN listings l ON l.listing_id = r.listing_id
+                                WHERE l.seller = users.username OR l.seller_username = users.username
+                            )
+                        WHERE username = ?
+                        """)) {
+                    ratingUpdate.setString(1, seller);
+                    ratingUpdate.executeUpdate();
+                }
+                insertNotification(connection, seller, buyerUsername, "New seller rating",
+                        buyerUsername + " rated the deal for " + itemName + " " + rating + " / 5.", "Rating");
+                connection.commit();
+            } catch (RuntimeException | SQLException e) {
+                connection.rollback();
+                if (e instanceof RuntimeException runtimeException) throw runtimeException;
+                throw new IllegalStateException("Could not save the review.", e);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not save the review.", e);
+        }
+    }
+
+    public static List<Map<String, Object>> fetchSellerReviews(String sellerUsername) {
+        return fetchQuery("""
+                SELECT r.rating, r.text, r.buyer_username, r.listing_id, r.created_at, r.seller_reply,
+                       l.item_name, COALESCE(l.seller, l.seller_username) AS seller_username
+                FROM reviews r
+                JOIN listings l ON l.listing_id = r.listing_id
+                WHERE (l.seller = ? OR l.seller_username = ?) AND COALESCE(r.hidden, 0) = 0
+                ORDER BY COALESCE(r.created_at, '') DESC
+                """, sellerUsername, sellerUsername);
+    }
+
+    public static List<Map<String, Object>> fetchAllReviews() {
+        return fetchQuery("""
+                SELECT r.buyer_username, r.listing_id, r.rating, r.text, r.created_at, r.seller_reply,
+                       COALESCE(r.hidden, 0) AS hidden, l.item_name,
+                       COALESCE(l.seller, l.seller_username) AS seller_username
+                FROM reviews r
+                JOIN listings l ON l.listing_id = r.listing_id
+                ORDER BY COALESCE(r.created_at, '') DESC
+                """);
+    }
+
+    public static void setReviewHidden(String buyerUsername, int listingId, boolean hidden) {
+        try (Connection connection = connect();
+             PreparedStatement statement = connection.prepareStatement("""
+                     UPDATE reviews SET hidden = ? WHERE buyer_username = ? AND listing_id = ?
+                     """)) {
+            statement.setInt(1, hidden ? 1 : 0);
+            statement.setString(2, buyerUsername);
+            statement.setInt(3, listingId);
+            if (statement.executeUpdate() != 1) {
+                throw new IllegalArgumentException("Review was not found.");
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not update review visibility.", e);
+        }
+    }
+
+    public static void setUserActive(String username, boolean active) {
+        try (Connection connection = connect();
+             PreparedStatement statement = connection.prepareStatement("""
+                     UPDATE users SET active = ? WHERE username = ? COLLATE NOCASE
+                     """)) {
+            statement.setInt(1, active ? 1 : 0);
+            statement.setString(2, username);
+            if (statement.executeUpdate() != 1) {
+                throw new IllegalArgumentException("User was not found.");
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not update the user account.", e);
+        }
+    }
+
+    /** Removes a listing from the marketplace and tells buyers who still have an open offer. */
+    public static void removeListing(int listingId) {
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            try {
+                String itemName;
+                try (PreparedStatement statement = connection.prepareStatement(
+                        "SELECT item_name, listing_status FROM listings WHERE listing_id = ?")) {
+                    statement.setInt(1, listingId);
+                    try (ResultSet result = statement.executeQuery()) {
+                        if (!result.next()) throw new IllegalArgumentException("Listing was not found.");
+                        if ("REMOVED".equals(result.getString("listing_status"))) {
+                            throw new IllegalStateException("This listing is already removed.");
+                        }
+                        itemName = result.getString("item_name");
+                    }
+                }
+                try (PreparedStatement update = connection.prepareStatement("""
+                        UPDATE listings SET listing_status = 'REMOVED', availability_status = 'Unavailable'
+                        WHERE listing_id = ? AND listing_status <> 'REMOVED'
+                        """)) {
+                    update.setInt(1, listingId);
+                    if (update.executeUpdate() != 1) {
+                        throw new IllegalStateException("This listing is already removed.");
+                    }
+                }
+                try (PreparedStatement requests = connection.prepareStatement("""
+                        SELECT request_id, buyer_username FROM listing_requests
+                        WHERE listing_id = ? AND status IN ('PENDING', 'COUNTERED', 'ACCEPTED')
+                            AND completed_at IS NULL AND returned_at IS NULL
+                        """)) {
+                    requests.setInt(1, listingId);
+                    try (ResultSet result = requests.executeQuery()) {
+                        while (result.next()) {
+                            String marker = "(request " + result.getInt("request_id") + ")";
+                            insertNotification(connection, result.getString("buyer_username"), "admin",
+                                    "Listing removed",
+                                    itemName + " was removed. This notice is only for your open offer. " + marker,
+                                    "Offer");
+                        }
+                    }
+                }
+                connection.commit();
+            } catch (RuntimeException | SQLException e) {
+                connection.rollback();
+                if (e instanceof RuntimeException runtimeException) throw runtimeException;
+                throw new IllegalStateException("Could not remove the listing.", e);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not remove the listing.", e);
+        }
+    }
+
+    public static void notifyBuyerIfListingRemoved(String buyerUsername) {
+        List<Map<String, Object>> rows = fetchQuery("""
+                SELECT r.request_id, COALESCE(l.item_name, 'A listing') AS item_name, l.listing_id, l.listing_status
+                FROM listing_requests r
+                LEFT JOIN listings l ON l.listing_id = r.listing_id
+                WHERE r.buyer_username = ?
+                    AND r.status IN ('PENDING', 'COUNTERED', 'ACCEPTED')
+                    AND r.completed_at IS NULL AND r.returned_at IS NULL
+                    AND (l.listing_id IS NULL OR l.listing_status = 'REMOVED')
+                """, buyerUsername);
+        for (Map<String, Object> row : rows) {
+            String marker = "(request " + row.get("request_id") + ")";
+            boolean alreadySent = fetchQuery("""
+                    SELECT 1 FROM notifications
+                    WHERE username = ? AND category = 'Offer' AND message LIKE ?
+                    """, buyerUsername, "%" + marker).stream().findAny().isPresent();
+            if (alreadySent) continue;
+            String itemName = String.valueOf(row.get("item_name"));
+            createNotification(buyerUsername, "admin", "Listing removed",
+                    itemName + " was removed. This notice is only for your open offer. " + marker, "Offer");
         }
     }
 }

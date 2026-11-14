@@ -202,6 +202,16 @@
 .table-row-cell:selected {
     -fx-background-color: #e8f0f8;
 }
+/* Deal History selection uses white text, so the highlight must stay dark enough to read. */
+.deal-history-table .table-row-cell:filled:selected,
+.deal-history-table:focused > .virtual-flow > .clipped-container > .sheet > .table-row-cell:filled:selected {
+    -fx-background: #003974;
+    -fx-background-color: #003974;
+}
+.deal-history-table .table-row-cell:filled:selected .table-cell,
+.deal-history-table:focused > .virtual-flow > .clipped-container > .sheet > .table-row-cell:filled:selected .table-cell {
+    -fx-text-fill: white;
+}
 
 /* ---------- Welcome / Auth screens ---------- */
 .auth-pane {

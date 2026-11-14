@@ -8,6 +8,7 @@ import com.hkust.marketplace.models.ListingStatus;
 import com.hkust.marketplace.models.ListingType;
 import com.hkust.marketplace.models.Message;
 import com.hkust.marketplace.models.Notification;
+import com.hkust.marketplace.models.Review;
 
 import java.nio.file.Path;
 import java.time.LocalDate;
@@ -16,6 +17,7 @@ import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import org.mindrot.jbcrypt.BCrypt;
@@ -305,6 +307,10 @@ public class DataService {
                 if (!"GIVEAWAY".equals(listingType)) {
                     throw new IllegalArgumentException("Claims are only available for giveaway listings.");
                 }
+                if (buyer.equalsIgnoreCase((String) listing.get("seller"))) {
+                    throw new IllegalArgumentException("You cannot request your own listing.");
+                }
+                return DatabaseManager.claimGiveaway(buyer, id);
             }
             default -> throw new IllegalArgumentException("Invalid request type.");
         }
@@ -540,7 +546,12 @@ public class DataService {
         listing.setAvailabilityStatus((String) row.get("availability_status"));
         listing.setReviewVersion(((Number) row.get("review_version")).longValue());
         listing.setViewCount(((Number) row.get("views")).intValue());
-        listing.setSellerUsername((String) row.get("seller_username"));
+        String sellerUsername = (String) row.get("seller_username");
+        if ((sellerUsername == null || sellerUsername.isBlank())
+                && row.get("seller") instanceof String seller && !seller.isBlank()) {
+            sellerUsername = seller;
+        }
+        listing.setSellerUsername(sellerUsername == null || sellerUsername.isBlank() ? null : sellerUsername);
         if (listing.getSellerUsername() != null) {
             Map<String, Object> seller = DatabaseManager.fetchRow("users", "username", listing.getSellerUsername());
             listing.setSellerFullName(seller == null ? listing.getSellerUsername() : (String) seller.get("full_name"));
@@ -576,6 +587,10 @@ public class DataService {
         notification.setTimestamp(parseDate((String) row.get("timestamp")));
         notification.setRead(((Number) row.get("is_read")).intValue() != 0);
         return notification;
+    }
+
+    private static String text(String value) {
+        return value == null ? "" : value;
     }
 
     private static LocalDateTime parseDate(String value) {
@@ -703,5 +718,278 @@ public class DataService {
         }
         chatHistory.setMessages(messages);
         return chatHistory;
+    }
+
+    /**
+     * Buyer registration. Password rules: at least 8 characters, one uppercase letter,
+     * one lowercase letter, and one digit. The password is stored only as a BCrypt hash.
+     */
+    public static void registerBuyer(String username, String fullName, String password,
+                                     String confirmPassword, String residenceHall) {
+        String normalizedUsername = username == null ? "" : username.trim();
+        String normalizedName = fullName == null ? "" : fullName.trim();
+        if (normalizedUsername.isEmpty()) {
+            throw new IllegalArgumentException("Username is required.");
+        }
+        if (DatabaseManager.usernameExists(normalizedUsername)) {
+            throw new IllegalArgumentException("The username has been used.");
+        }
+        if (normalizedName.isEmpty()) {
+            throw new IllegalArgumentException("Full name cannot be empty.");
+        }
+        if (!"OK".equals(checkPasswordStrength(password))) {
+            throw new IllegalArgumentException("The password is too weak to be used.");
+        }
+        if (confirmPassword == null || !confirmPassword.equals(password)) {
+            throw new BuyerInputException("The confirm-password was incorrect.", true);
+        }
+        String residence = residenceHall == null || residenceHall.isBlank() ? null : residenceHall;
+        DatabaseManager.createUser(normalizedUsername, normalizedName, hashPassword(password),
+                UserRole.BUYER, residence, null, null);
+    }
+
+    /** Updates the signed-in buyer's name and, when supplied, password. */
+    public static void updateBuyerProfile(String fullName, String residenceHall,
+                                          String newPassword, String confirmPassword) {
+        String buyer = requireBuyer();
+        String normalizedName = fullName == null ? "" : fullName.trim();
+        if (normalizedName.isEmpty()) {
+            throw new IllegalArgumentException("Full name cannot be empty.");
+        }
+        boolean changePassword = newPassword != null && !newPassword.isBlank();
+        String passwordHash = null;
+        if (changePassword) {
+            if (!"OK".equals(checkPasswordStrength(newPassword))) {
+                throw new IllegalArgumentException("The password is too weak to be used.");
+            }
+            if (confirmPassword == null || !confirmPassword.equals(newPassword)) {
+                throw new BuyerInputException("The confirm-password was incorrect.", true);
+            }
+            passwordHash = hashPassword(newPassword);
+        }
+        User user = SessionManager.getCurrentUser();
+        String residence = residenceHall == null || residenceHall.isBlank() ? null : residenceHall;
+        DatabaseManager.updateUserProfile(buyer, normalizedName, residence, user.getBio(),
+                user.getPreferredMeetup(), passwordHash);
+        user.setFullName(normalizedName);
+        user.setResidenceHall(residence);
+        if (passwordHash != null) user.setPasswordHash(passwordHash);
+    }
+
+    public static List<Listing> searchBuyerMarketplace(String keyword, String category, String listingType,
+                                                       String condition, Double minPrice, Double maxPrice,
+                                                       String sort) {
+        String buyer = requireBuyer();
+        List<Integer> hidden = DatabaseManager.fetchReportedListingIds(buyer);
+        String needle = keyword == null ? "" : keyword.trim().toLowerCase(Locale.ROOT);
+        List<Listing> matches = new ArrayList<>();
+        for (Listing listing : getLiveListings()) {
+            if (hidden.contains(Integer.parseInt(listing.getId()))) continue;
+            if (category != null && !category.isBlank() && !"All Categories".equals(category)
+                    && !category.equals(listing.getCategory())) continue;
+            if (listingType != null && !listingType.isBlank() && !"All Types".equals(listingType)
+                    && !listingType.equalsIgnoreCase(listing.getType().name())
+                    && !listingType.equalsIgnoreCase(listing.getTypeDisplay())) continue;
+            if (condition != null && !condition.isBlank() && !"All Conditions".equals(condition)
+                    && !condition.equals(listing.getCondition())) continue;
+            if (minPrice != null || maxPrice != null) {
+                if (listing.getPrice() == null) continue;
+                if (minPrice != null && listing.getPrice() < minPrice) continue;
+                if (maxPrice != null && listing.getPrice() > maxPrice) continue;
+            }
+            if (!needle.isEmpty()) {
+                String haystack = String.join(" ",
+                        text(listing.getTitle()), text(listing.getDescription()), text(listing.getCategory()),
+                        text(listing.getSellerFullName()), text(listing.getMeetupLocation()),
+                        text(listing.getCondition())).toLowerCase(Locale.ROOT);
+                if (!haystack.contains(needle)) continue;
+            }
+            matches.add(listing);
+        }
+        Comparator<Listing> comparator = switch (sort == null ? "Newest" : sort) {
+            case "Price: Low to High" -> Comparator.comparing(Listing::getPrice,
+                    Comparator.nullsLast(Comparator.naturalOrder()));
+            case "Price: High to Low" -> Comparator.comparing(Listing::getPrice,
+                    Comparator.nullsLast(Comparator.reverseOrder()));
+            default -> Comparator.comparing(Listing::getPostedAt,
+                    Comparator.nullsLast(Comparator.reverseOrder()));
+        };
+        matches.sort(comparator.thenComparing(Listing::getId));
+        return matches;
+    }
+
+    /** Opens a listing detail and counts one view. Reported listings stay hidden. */
+    public static Listing openBuyerListing(String listingId) {
+        String buyer = requireBuyer();
+        int id = parseListingId(listingId);
+        if (DatabaseManager.hasListingReport(buyer, id)) {
+            throw new IllegalStateException("This listing is hidden because you reported it.");
+        }
+        Map<String, Object> row = DatabaseManager.fetchRow("listings", "listing_id", id);
+        if (row == null) return null;
+        DatabaseManager.incrementListingViews(id);
+        row = DatabaseManager.fetchRow("listings", "listing_id", id);
+        return toListing(row);
+    }
+
+    /** Reads the current listing without counting another view. */
+    public static Listing peekBuyerListing(String listingId) {
+        String buyer = requireBuyer();
+        int id = parseListingId(listingId);
+        if (DatabaseManager.hasListingReport(buyer, id)) {
+            throw new IllegalStateException("This listing is hidden because you reported it.");
+        }
+        Map<String, Object> row = DatabaseManager.fetchRow("listings", "listing_id", id);
+        return row == null ? null : toListing(row);
+    }
+
+    public static void reportBuyerListing(String listingId) {
+        String buyer = requireBuyer();
+        DatabaseManager.reportListing(buyer, parseListingId(listingId));
+    }
+
+    public static int submitBorrowRequest(String listingId, LocalDateTime start, LocalDateTime end) {
+        String buyer = requireBuyer();
+        int id = parseListingId(listingId);
+        Map<String, Object> listing = DatabaseManager.fetchRow("listings", "listing_id", id);
+        if (listing == null || !"LEND".equals(listing.get("listing_type"))) {
+            throw new IllegalArgumentException("Borrow requests are only available for lend listings.");
+        }
+        if (buyer.equalsIgnoreCase((String) listing.get("seller"))) {
+            throw new IllegalArgumentException("You cannot request your own listing.");
+        }
+        return DatabaseManager.createBorrowRequest(buyer, id, start, end);
+    }
+
+    public static List<Map<String, Object>> getBuyerDeals() {
+        String buyer = requireBuyer();
+        DatabaseManager.settleExpiredBorrows(buyer);
+        return DatabaseManager.fetchBuyerDeals(buyer);
+    }
+
+    public static int settleExpiredBorrows() {
+        return DatabaseManager.settleExpiredBorrows(requireBuyer());
+    }
+
+    public static void selfReturnBorrow(int requestId) {
+        DatabaseManager.returnBorrow(requireBuyer(), requestId, false);
+    }
+
+    public static void completeBuyerDeal(int requestId) {
+        DatabaseManager.completeBuyerDeal(requireBuyer(), requestId);
+    }
+
+    public static void rateCompletedDeal(int requestId, double rating, String reviewText) {
+        DatabaseManager.createBuyerReview(requireBuyer(), requestId, rating, reviewText);
+    }
+
+    public static List<Map<String, Object>> getSellerReviews(String sellerUsername) {
+        requireBuyer();
+        if (sellerUsername == null || sellerUsername.isBlank()) return List.of();
+        return DatabaseManager.fetchSellerReviews(sellerUsername);
+    }
+
+    public static Map<String, Object> getSellerRating(String sellerUsername) {
+        requireBuyer();
+        Map<String, Object> seller = DatabaseManager.fetchRow("users", "username", sellerUsername);
+        if (seller == null) return Map.of("average_rating", 0.0, "rating_count", 0, "full_name", sellerUsername);
+        return seller;
+    }
+
+    public static List<Notification> getBuyerNotifications() {
+        String buyer = requireBuyer();
+        DatabaseManager.settleExpiredBorrows(buyer);
+        DatabaseManager.notifyBuyerIfListingRemoved(buyer);
+        return getNotificationsFor(buyer);
+    }
+
+    public static void markBuyerNotificationRead(String notificationId) {
+        DatabaseManager.markNotificationRead(requireBuyer(), notificationId);
+    }
+
+    public static boolean isBuyerDealFinished(Map<String, Object> deal) {
+        return deal.get("completed_at") != null || deal.get("returned_at") != null
+                || "DECLINED".equals(deal.get("status"));
+    }
+
+    public static List<Review> getReviewsForCurrentSeller() {
+        return mapReviews(DatabaseManager.fetchSellerReviews(requireSeller()));
+    }
+
+    public static List<Review> getAllReviews() {
+        requireAdmin();
+        return mapReviews(DatabaseManager.fetchAllReviews());
+    }
+
+    public static void setReviewHidden(String buyerUsername, String listingId, boolean hidden) {
+        requireAdmin();
+        DatabaseManager.setReviewHidden(buyerUsername, parseListingId(listingId), hidden);
+    }
+
+    public static List<Listing> getAllListings() {
+        requireAdmin();
+        List<Listing> listings = new ArrayList<>();
+        for (Map<String, Object> row : DatabaseManager.fetchRows("listings", Map.of())) {
+            listings.add(toListing(row));
+        }
+        listings.sort(Comparator.comparing(Listing::getSubmittedAt,
+                Comparator.nullsLast(Comparator.reverseOrder())).thenComparing(Listing::getId));
+        return listings;
+    }
+
+    public static void removeListing(String listingId) {
+        requireAdmin();
+        DatabaseManager.removeListing(parseListingId(listingId));
+    }
+
+    public static List<User> getAllUsers() {
+        requireAdmin();
+        List<User> users = new ArrayList<>();
+        for (Map<String, Object> row : DatabaseManager.fetchRows("users", Map.of())) {
+            users.add(toUser(row));
+        }
+        users.sort(Comparator.comparing(User::getUsername, String.CASE_INSENSITIVE_ORDER));
+        return users;
+    }
+
+    public static void setUserActive(String username, boolean active) {
+        requireAdmin();
+        if (username == null || username.isBlank()) {
+            throw new IllegalArgumentException("A username is required.");
+        }
+        DatabaseManager.setUserActive(username, active);
+    }
+
+    private static List<Review> mapReviews(List<Map<String, Object>> rows) {
+        List<Review> reviews = new ArrayList<>();
+        for (Map<String, Object> row : rows) {
+            Review review = new Review();
+            if (row.get("listing_id") != null) review.setId(row.get("listing_id").toString());
+            review.setBuyerUsername((String) row.get("buyer_username"));
+            review.setSellerUsername((String) row.get("seller_username"));
+            review.setListingTitle((String) row.get("item_name"));
+            review.setComment(row.get("text") == null ? "" : (String) row.get("text"));
+            review.setSellerReply((String) row.get("seller_reply"));
+            double score = row.get("rating") instanceof Number number ? number.doubleValue() : 0;
+            review.setRating((int) Math.max(0, Math.min(5, Math.round(score))));
+            review.setHidden(row.get("hidden") instanceof Number number && number.intValue() != 0);
+            if (row.get("created_at") != null) review.setCreatedAt(parseDate(row.get("created_at").toString()));
+            reviews.add(review);
+        }
+        return reviews;
+    }
+
+    /** Validation failure that tells the form whether to clear the confirm-password field. */
+    public static class BuyerInputException extends IllegalArgumentException {
+        private final boolean clearConfirmPassword;
+
+        public BuyerInputException(String message, boolean clearConfirmPassword) {
+            super(message);
+            this.clearConfirmPassword = clearConfirmPassword;
+        }
+
+        public boolean isClearConfirmPassword() {
+            return clearConfirmPassword;
+        }
     }
 }

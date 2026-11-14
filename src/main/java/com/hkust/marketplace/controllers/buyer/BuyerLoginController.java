@@ -30,31 +30,19 @@ public class BuyerLoginController {
             return;
         }
 
-        if (!DatabaseManager.usernameExists(username)) {
-            showError("User not found. Please check your username.");
+        var account = DatabaseManager.fetchRow("users", "username", username);
+        if (account != null && !"BUYER".equals(account.get("role"))) {
+            showError("This account is not a buyer account. Please use the correct portal.");
+            return;
+        }
+        if (account != null && ((Number) account.get("active")).intValue() == 0) {
+            showError("This account has been deactivated. Contact admin.");
             return;
         }
 
-        User user;
-        try {
-            user = DataService.toUser(
-                DatabaseManager.fetchRow("users", "username", username)
-            );
-        } catch (Exception e) {
-            showError("User not found. Please check your username.");
-            return;
-        }
-        if (user.getRole() != UserRole.BUYER) {
-            showError("This account is not a Buyer account. Please use the correct portal.");
-            return;
-        }
-        
-        if (!DataService.checkPassword(password, user.getPasswordHash())) {
-            showError("Incorrect password. Please try again.");
-            return;
-        }
-        if (!user.isActive()) {
-            showError("This account has been deactivated. Contact admin.");
+        User user = DataService.authenticate(username, password, UserRole.BUYER);
+        if (user == null) {
+            showError("The credentials are invalid.");
             return;
         }
 

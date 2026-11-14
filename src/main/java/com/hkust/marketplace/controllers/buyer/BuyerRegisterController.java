@@ -1,9 +1,6 @@
 package com.hkust.marketplace.controllers.buyer;
 
-import com.hkust.marketplace.models.User;
-import com.hkust.marketplace.models.UserRole;
 import com.hkust.marketplace.utils.DataService;
-import com.hkust.marketplace.utils.DatabaseManager;
 import com.hkust.marketplace.utils.SceneManager;
 import javafx.collections.FXCollections;
 import javafx.fxml.FXML;
@@ -31,53 +28,28 @@ public class BuyerRegisterController {
     private void handleRegister() {
         hideMessages();
 
-        String username = usernameField.getText().trim();
-        String fullName = fullNameField.getText().trim();
+        String username = usernameField.getText();
+        String fullName = fullNameField.getText();
         String password = passwordField.getText();
         String confirm = confirmPasswordField.getText();
         String residence = residenceCombo.getValue();
 
-        // Validation
-        if (username.isEmpty()) {
-            showError("Username is required.");
-            return;
-        }
-        if (DatabaseManager.usernameExists(username)) {
-            showError("Username already taken. Please choose another.");
-            return;
-        }
-        if (fullName.isEmpty()) {
-            showError("Full Name cannot be empty.");
-            return;
-        }
-        String pwdCheck = DataService.checkPasswordStrength(password);
-        if (!"OK".equals(pwdCheck)) {
-            showError(pwdCheck);
-            return;
-        }
-        if (!password.equals(confirm)) {
-            showError("Passwords do not match.");
-            confirmPasswordField.clear();
-            return;
-        }
-
-        String passwordHash = DataService.hashPassword(password);
-        User user = new User(username.toLowerCase(), fullName, passwordHash, UserRole.BUYER);
-        if (residence != null) {
-            user.setResidenceHall(residence);
-        }
         try {
-            DatabaseManager.createUser(username, fullName, passwordHash, UserRole.BUYER, residence, null, null);
-            showSuccess("Registration successful! You can now login.");
-        } catch (IllegalStateException e) {
+            DataService.registerBuyer(username, fullName, password, confirm, residence);
+            showSuccess("Registration is successful. You can now login.");
+            usernameField.clear();
+            fullNameField.clear();
+            passwordField.clear();
+            confirmPasswordField.clear();
+            residenceCombo.getSelectionModel().clearSelection();
+        } catch (DataService.BuyerInputException ex) {
+            if (ex.isClearConfirmPassword()) confirmPasswordField.clear();
+            showError(ex.getMessage());
+        } catch (IllegalArgumentException ex) {
+            showError(ex.getMessage());
+        } catch (IllegalStateException ex) {
             showError("Registration failed. Please try again.");
         }
-        // Clear form
-        usernameField.clear();
-        fullNameField.clear();
-        passwordField.clear();
-        confirmPasswordField.clear();
-        residenceCombo.getSelectionModel().clearSelection();
     }
 
     private void showError(String msg) {

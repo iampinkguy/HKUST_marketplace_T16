@@ -3,7 +3,6 @@ package com.hkust.marketplace.controllers.seller;
 import com.hkust.marketplace.models.*;
 import com.hkust.marketplace.utils.DataService;
 import com.hkust.marketplace.utils.DatabaseManager;
-import com.hkust.marketplace.utils.DummyDataService;
 import com.hkust.marketplace.utils.SceneManager;
 import com.hkust.marketplace.utils.SessionManager;
 import javafx.collections.FXCollections;
@@ -762,9 +761,14 @@ public class SellerDashboardController {
         VBox root = new VBox(12);
         root.setPadding(new Insets(4));
 
-        User user = SessionManager.getCurrentUser();
-        List<Review> reviews = DummyDataService.getInstance()
-                .getReviewsForSeller(user != null ? user.getUsername() : "");
+        List<Review> reviews;
+        try {
+            reviews = DataService.getReviewsForCurrentSeller();
+        } catch (IllegalStateException | SecurityException ex) {
+            root.getChildren().add(new Label("Could not load reviews: " + ex.getMessage()));
+            contentPane.getChildren().add(new ScrollPane(root));
+            return;
+        }
 
         if (reviews.isEmpty()) {
             root.getChildren().add(new Label("No reviews yet."));
@@ -867,7 +871,7 @@ public class SellerDashboardController {
         confirmation.setPromptText("Confirm new password");
         TextArea bio = new TextArea(user != null && user.getBio() != null ? user.getBio() : "");
         bio.setPrefRowCount(3);
-        ComboBox<String> meetup = new ComboBox<>(FXCollections.observableArrayList(DummyDataService.HKUST_LOCATIONS));
+        ComboBox<String> meetup = new ComboBox<>(FXCollections.observableArrayList(DataService.HKUST_LOCATIONS));
         if (user != null && user.getPreferredMeetup() != null) meetup.setValue(user.getPreferredMeetup());
         meetup.setMaxWidth(Double.MAX_VALUE);
 
