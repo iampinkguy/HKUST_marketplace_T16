@@ -270,6 +270,199 @@ public class DataService {
         return (String) account.get("username");
     }
 
+    public static List<Map<String, Object>> getPendingSellerRequests() {
+        return DatabaseManager.fetchSellerPendingRequests(requireSeller());
+    }
+
+    public static List<Map<String, Object>> getBuyerRequests() {
+        return DatabaseManager.fetchBuyerRequests(requireBuyer());
+    }
+
+    public static int submitBuyerRequest(String listingId, String requestType,
+                                         Double offerPrice, Integer proposedDays) {
+        String buyer = requireBuyer();
+        int id = parseListingId(listingId);
+        Map<String, Object> listing = DatabaseManager.fetchRow("listings", "listing_id", id);
+        if (listing == null || !"LIVE".equals(listing.get("listing_status"))
+                || !"Available".equals(listing.get("availability_status"))) {
+            throw new IllegalStateException("This listing is no longer available.");
+        }
+        String type = requestType == null ? "" : requestType.toUpperCase();
+        String listingType = (String) listing.get("listing_type");
+        switch (type) {
+            case "OFFER" -> {
+                if (!"SELL".equals(listingType) || offerPrice == null
+                        || !Double.isFinite(offerPrice) || offerPrice <= 0) {
+                    throw new IllegalArgumentException("Enter a valid positive offer for a sell listing.");
+                }
+            }
+            case "BORROW" -> {
+                if (!"LEND".equals(listingType) || proposedDays == null || proposedDays <= 0) {
+                    throw new IllegalArgumentException("Enter a valid borrowing duration.");
+                }
+            }
+            case "CLAIM" -> {
+                if (!"GIVEAWAY".equals(listingType)) {
+                    throw new IllegalArgumentException("Claims are only available for giveaway listings.");
+                }
+            }
+            default -> throw new IllegalArgumentException("Invalid request type.");
+        }
+        if (buyer.equalsIgnoreCase((String) listing.get("seller"))) {
+            throw new IllegalArgumentException("You cannot request your own listing.");
+        }
+        return DatabaseManager.createListingRequest(buyer, id, type, offerPrice, proposedDays);
+    }
+
+    public static void resolveSellerRequest(int requestId, String action, Double counterPrice) {
+        String seller = requireSeller();
+        if ("COUNTER".equalsIgnoreCase(action)
+                && (counterPrice == null || !Double.isFinite(counterPrice) || counterPrice <= 0)) {
+            throw new IllegalArgumentException("Enter a valid positive counteroffer.");
+        }
+        DatabaseManager.resolveListingRequest(seller, requestId, action, counterPrice);
+    }
+
+    public static List<Map<String, Object>> getRequestMessages(int requestId) {
+        String username = requireAuthenticatedUser();
+        if (!isRequestParticipant(username, requestId)) {
+            throw new SecurityException("You are not a participant in this request.");
+        }
+        return DatabaseManager.fetchRequestMessages(requestId);
+    }
+
+    public static void sendRequestMessage(int requestId, String content) {
+        String username = requireAuthenticatedUser();
+        if (content == null || content.isBlank() || content.length() > 2000) {
+            throw new IllegalArgumentException("Messages must contain 1 to 2000 characters.");
+        }
+        if (!isRequestParticipant(username, requestId)) {
+            throw new SecurityException("You are not a participant in this request.");
+        }
+        User user = SessionManager.getCurrentUser();
+        DatabaseManager.appendRequestMessage(requestId, username, user.getRole().name(), content.trim());
+        Map<String, Object> request = DatabaseManager.fetchRow("listing_requests", "request_id", requestId);
+        if (request != null) {
+            String recipient = username.equals(request.get("buyer_username"))
+                    ? (String) DatabaseManager.fetchRow("listings", "listing_id",
+                            ((Number) request.get("listing_id")).intValue()).get("seller")
+                    : (String) request.get("buyer_username");
+            DatabaseManager.createNotification(recipient, username, "New request chat message",
+                    "You have a new message about a listing request.", "Chat");
+        }
+    }
+
+    public static List<String> getSellerListingChatBuyers(String listingId) {
+        String seller = requireSeller();
+        Map<String, Object> listing = DatabaseManager.fetchRow(
+                "listings", "listing_id", parseListingId(listingId));
+        if (listing == null || !seller.equalsIgnoreCase((String) listing.get("seller"))) {
+            throw new SecurityException("You can only view chats for your own listings.");
+        }
+        return DatabaseManager.fetchChatBuyerUsernames(listingId);
+    }
+
+    public static ChatHistory getSellerListingChat(String listingId, String buyerUsername) {
+        String seller = requireSeller();
+        Map<String, Object> listing = DatabaseManager.fetchRow(
+                "listings", "listing_id", parseListingId(listingId));
+        if (listing == null || !seller.equalsIgnoreCase((String) listing.get("seller"))) {
+            throw new SecurityException("You can only view chats for your own listings.");
+        }
+        requireSellerChatParticipant(listingId, buyerUsername);
+        DatabaseManager.markChatHistorySeen(listingId, buyerUsername, "seller");
+        return DatabaseManager.fetchChatHistoryOf(listingId, buyerUsername);
+    }
+
+    public static void sendSellerListingChatMessage(String listingId, String buyerUsername, String content) {
+        String seller = requireSeller();
+        Map<String, Object> listing = DatabaseManager.fetchRow(
+                "listings", "listing_id", parseListingId(listingId));
+        if (listing == null || !seller.equalsIgnoreCase((String) listing.get("seller"))) {
+            throw new SecurityException("You can only reply to chats for your own listings.");
+        }
+        requireSellerChatParticipant(listingId, buyerUsername);
+        if (content == null || content.isBlank() || content.length() > 2000) {
+            throw new IllegalArgumentException("Messages must contain 1 to 2000 characters.");
+        }
+        DatabaseManager.appendMessageToChatHistory(
+                listingId, buyerUsername, new Message(seller, "seller", content.trim()));
+        DatabaseManager.markChatHistorySeen(listingId, buyerUsername, "seller");
+        DatabaseManager.createNotification(buyerUsername, seller,
+                "New seller chat message",
+                "The seller replied to your message about " + listing.get("item_name") + ".",
+                "Chat");
+    }
+
+    public static ChatHistory getBuyerListingChat(String listingId) {
+        String buyer = requireBuyer();
+        Map<String, Object> listing = DatabaseManager.fetchRow(
+                "listings", "listing_id", parseListingId(listingId));
+        if (listing == null || buyer.equalsIgnoreCase((String) listing.get("seller"))) {
+            throw new SecurityException("You can only chat with a seller about another seller's listing.");
+        }
+        DatabaseManager.markChatHistorySeen(listingId, buyer, "buyer");
+        return DatabaseManager.fetchChatHistoryOf(listingId, buyer);
+    }
+
+    public static void sendBuyerListingChatMessage(String listingId, String content) {
+        String buyer = requireBuyer();
+        Map<String, Object> listing = DatabaseManager.fetchRow(
+                "listings", "listing_id", parseListingId(listingId));
+        if (listing == null || buyer.equalsIgnoreCase((String) listing.get("seller"))) {
+            throw new SecurityException("You can only chat with a seller about another seller's listing.");
+        }
+        if (content == null || content.isBlank() || content.length() > 2000) {
+            throw new IllegalArgumentException("Messages must contain 1 to 2000 characters.");
+        }
+        String seller = (String) listing.get("seller");
+        DatabaseManager.appendMessageToChatHistory(
+                listingId, buyer, new Message(buyer, "buyer", content.trim()));
+        DatabaseManager.markChatHistorySeen(listingId, buyer, "buyer");
+        User user = SessionManager.getCurrentUser();
+        DatabaseManager.createNotification(seller, buyer, "New chat message",
+                user.getFullName() + " sent you a message about " + listing.get("item_name"), "Chat");
+    }
+
+    private static void requireSellerChatParticipant(String listingId, String buyerUsername) {
+        if (buyerUsername == null || buyerUsername.isBlank()
+                || !DatabaseManager.fetchChatBuyerUsernames(listingId).contains(buyerUsername)) {
+            throw new SecurityException("This buyer has no chat for the selected listing.");
+        }
+    }
+
+    private static boolean isRequestParticipant(String username, int requestId) {
+        User user = SessionManager.getCurrentUser();
+        return (user.getRole() == UserRole.BUYER || user.getRole() == UserRole.SELLER)
+                && DatabaseManager.isRequestParticipant(username, requestId);
+    }
+
+    private static String requireBuyer() {
+        User user = SessionManager.getCurrentUser();
+        if (user == null || user.getRole() != UserRole.BUYER || !user.isActive()) {
+            throw new SecurityException("An active buyer account is required.");
+        }
+        Map<String, Object> account = DatabaseManager.fetchRow("users", "username", user.getUsername());
+        if (account == null || !"BUYER".equals(account.get("role"))
+                || ((Number) account.get("active")).intValue() != 1) {
+            throw new SecurityException("An active buyer account is required.");
+        }
+        return (String) account.get("username");
+    }
+
+    private static String requireAuthenticatedUser() {
+        User user = SessionManager.getCurrentUser();
+        if (user == null || !user.isActive()) {
+            throw new SecurityException("An active authenticated account is required.");
+        }
+        Map<String, Object> account = DatabaseManager.fetchRow("users", "username", user.getUsername());
+        if (account == null || ((Number) account.get("active")).intValue() != 1
+                || !user.getRole().name().equals(account.get("role"))) {
+            throw new SecurityException("An active authenticated account is required.");
+        }
+        return (String) account.get("username");
+    }
+
     /** Shared read for the seller team's notification integration. */
     public static List<Notification> getNotificationsFor(String username) {
         User user = SessionManager.getCurrentUser();

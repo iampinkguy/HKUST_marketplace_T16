@@ -208,12 +208,16 @@ public class BuyerDashboardController {
         send.getStyleClass().add("btn-primary");
 
         Runnable refreshMessages = () -> {
-            ChatHistory history = DatabaseManager.fetchChatHistoryOf(listing.getId());
-            messageList.getItems().setAll(history == null || history.getMessages() == null
-                    ? List.of()
-                    : history.getMessages());
-            if (!messageList.getItems().isEmpty()) {
-                messageList.scrollTo(messageList.getItems().size() - 1);
+            try {
+                ChatHistory history = DataService.getBuyerListingChat(listing.getId());
+                messageList.getItems().setAll(history == null || history.getMessages() == null
+                        ? List.of()
+                        : history.getMessages());
+                if (!messageList.getItems().isEmpty()) {
+                    messageList.scrollTo(messageList.getItems().size() - 1);
+                }
+            } catch (IllegalStateException | SecurityException ex) {
+                new Alert(Alert.AlertType.ERROR, "Could not load chat: " + ex.getMessage()).showAndWait();
             }
         };
 
@@ -222,23 +226,13 @@ public class BuyerDashboardController {
             if (content.isEmpty()) {
                 return;
             }
-            String sellerUsername = listing.getSellerUsername();
-            if (sellerUsername == null || sellerUsername.isBlank()) {
-                new Alert(Alert.AlertType.ERROR,
-                        "This listing is not linked to a seller account.").showAndWait();
-                return;
+            try {
+                DataService.sendBuyerListingChatMessage(listing.getId(), content);
+                input.clear();
+                refreshMessages.run();
+            } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+                new Alert(Alert.AlertType.ERROR, "Could not send message: " + ex.getMessage()).showAndWait();
             }
-            DatabaseManager.appendMessageToChatHistory(listing.getId(),
-                    new Message(user.getUsername(), user.getRole().name().toLowerCase(), content));
-            DatabaseManager.markChatHistorySeen(listing.getId(), "buyer");
-            DatabaseManager.createNotification(
-                    sellerUsername,
-                    user.getUsername(),
-                    "New chat message",
-                    user.getFullName() + " sent you a message about " + listing.getTitle(),
-                    "Chat");
-            input.clear();
-            refreshMessages.run();
         });
 
         VBox content = new VBox(8, messageList, input, send);
@@ -256,13 +250,13 @@ public class BuyerDashboardController {
         dialog.showAndWait().ifPresent(priceStr -> {
             try {
                 double price = Double.parseDouble(priceStr);
-                Alert alert = new Alert(Alert.AlertType.INFORMATION);
-                alert.setTitle("Offer Submitted");
-                alert.setHeaderText(null);
-                alert.setContentText("Your offer of HK$" + price + " has been sent to " + listing.getSellerFullName() + ".\n\n(Demo only – no backend)");
-                alert.showAndWait();
+                DataService.submitBuyerRequest(listing.getId(), "OFFER", price, null);
+                new Alert(Alert.AlertType.INFORMATION,
+                        "Your offer has been sent to " + listing.getSellerFullName() + ".").showAndWait();
             } catch (NumberFormatException ex) {
                 new Alert(Alert.AlertType.ERROR, "Invalid price.").showAndWait();
+            } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+                new Alert(Alert.AlertType.ERROR, ex.getMessage()).showAndWait();
             }
         });
     }
@@ -275,7 +269,21 @@ public class BuyerDashboardController {
                 "\n\nSend borrow request to seller?");
         alert.showAndWait().ifPresent(resp -> {
             if (resp == ButtonType.OK) {
-                new Alert(Alert.AlertType.INFORMATION, "Borrow request sent!\n(Demo only)").showAndWait();
+                TextInputDialog duration = new TextInputDialog(String.valueOf(
+                        listing.getLendingDays() == null ? 1 : listing.getLendingDays()));
+                duration.setTitle("Borrow Request");
+                duration.setHeaderText("Proposed borrowing duration");
+                duration.setContentText("Number of days:");
+                duration.showAndWait().ifPresent(days -> {
+                    try {
+                        DataService.submitBuyerRequest(listing.getId(), "BORROW", null, Integer.parseInt(days));
+                        new Alert(Alert.AlertType.INFORMATION, "Borrow request sent to the seller.").showAndWait();
+                    } catch (NumberFormatException ex) {
+                        new Alert(Alert.AlertType.ERROR, "Enter a valid borrowing duration.").showAndWait();
+                    } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+                        new Alert(Alert.AlertType.ERROR, ex.getMessage()).showAndWait();
+                    }
+                });
             }
         });
     }
@@ -287,7 +295,12 @@ public class BuyerDashboardController {
         alert.setContentText("Are you sure you want to claim this giveaway item?");
         alert.showAndWait().ifPresent(resp -> {
             if (resp == ButtonType.OK) {
-                new Alert(Alert.AlertType.INFORMATION, "Item claimed successfully!\n(Demo only)").showAndWait();
+                try {
+                    DataService.submitBuyerRequest(listing.getId(), "CLAIM", null, null);
+                    new Alert(Alert.AlertType.INFORMATION, "Claim request sent to the seller.").showAndWait();
+                } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+                    new Alert(Alert.AlertType.ERROR, ex.getMessage()).showAndWait();
+                }
             }
         });
     }
@@ -321,27 +334,93 @@ public class BuyerDashboardController {
         table.getColumns().addAll(colTitle, colSeller, colType, colStatus, colAction);
 
         User user = SessionManager.getCurrentUser();
-        List<Map<String, Object>> offers = user == null
-                ? List.of()
-                : DatabaseManager.fetchBuyerOffers(user.getUsername());
+        List<Map<String, Object>> offers;
+        try {
+            offers = user == null ? List.of() : DataService.getBuyerRequests();
+        } catch (IllegalStateException | SecurityException e) {
+            new Alert(Alert.AlertType.ERROR, "Could not load your requests: " + e.getMessage()).showAndWait();
+            offers = List.of();
+        }
+        List<Map<String, Object>> requestRows = offers;
         List<String[]> rows = new java.util.ArrayList<>();
-        for (Map<String, Object> offer : offers) {
+        for (Map<String, Object> offer : requestRows) {
+            String requestType = String.valueOf(offer.get("request_type"));
+            String details = switch (requestType) {
+                case "OFFER" -> "Sell · HK$" + offer.get("offer_price");
+                case "BORROW" -> "Borrow · " + offer.get("proposed_days") + " days";
+                case "CLAIM" -> "Giveaway claim";
+                default -> requestType;
+            };
+            String status = String.valueOf(offer.get("status")).replace('_', ' ');
+            if (offer.get("counter_price") != null) status += " · Counter: HK$" + offer.get("counter_price");
             rows.add(new String[]{
                     String.valueOf(offer.get("item_name")),
                     String.valueOf(offer.get("seller_name")),
-                    String.valueOf(offer.get("listing_type")),
-                    "Submitted",
-                    "Chatbox"
+                    details,
+                    status,
+                    "Open Chat"
             });
         }
         table.setItems(FXCollections.observableArrayList(rows));
 
+        Button openChat = new Button("Open selected request chat");
+        openChat.getStyleClass().add("btn-outline");
+        openChat.setDisable(true);
+        table.getSelectionModel().selectedIndexProperty().addListener((observable, old, selected) ->
+                openChat.setDisable(selected.intValue() < 0));
+        openChat.setOnAction(event -> {
+            int selected = table.getSelectionModel().getSelectedIndex();
+            if (selected >= 0 && selected < requestRows.size()) {
+                showRequestChat(((Number) requestRows.get(selected).get("request_id")).intValue());
+            }
+        });
         root.getChildren().add(table);
+        root.getChildren().add(openChat);
         Label note = new Label("💡 Self-return for borrowed items and mark-complete are available here in the full version.");
         note.setStyle("-fx-text-fill: #9aa0b0; -fx-font-size: 12px;");
         root.getChildren().add(note);
 
         contentPane.getChildren().add(root);
+    }
+
+    private void showRequestChat(int requestId) {
+        Dialog<Void> dialog = new Dialog<>();
+        dialog.setTitle("Request Chat");
+        dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+        VBox messages = new VBox(8);
+        messages.setPadding(new Insets(8));
+        ScrollPane scroll = new ScrollPane(messages);
+        scroll.setFitToWidth(true);
+        scroll.setPrefViewportHeight(300);
+        TextField input = new TextField();
+        input.setPromptText("Write a message...");
+        Button send = new Button("Send");
+        send.getStyleClass().add("btn-gold");
+        Runnable refresh = () -> {
+            messages.getChildren().clear();
+            try {
+                for (Map<String, Object> message : DataService.getRequestMessages(requestId)) {
+                    Label line = new Label(message.get("sender_username") + ": " + message.get("content"));
+                    line.setWrapText(true);
+                    messages.getChildren().add(line);
+                }
+                scroll.setVvalue(1);
+            } catch (IllegalStateException | SecurityException e) {
+                new Alert(Alert.AlertType.ERROR, "Could not load request chat: " + e.getMessage()).showAndWait();
+            }
+        };
+        send.setOnAction(event -> {
+            try {
+                DataService.sendRequestMessage(requestId, input.getText());
+                input.clear();
+                refresh.run();
+            } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
+                new Alert(Alert.AlertType.ERROR, "Could not send message: " + e.getMessage()).showAndWait();
+            }
+        });
+        dialog.getDialogPane().setContent(new VBox(8, scroll, new HBox(8, input, send)));
+        refresh.run();
+        dialog.showAndWait();
     }
 
     @FXML
