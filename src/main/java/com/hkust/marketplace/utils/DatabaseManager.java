@@ -32,12 +32,15 @@ public class DatabaseManager {
 
     private static final String URL = "jdbc:sqlite:data.db";
     private static final Path UPLOADS_DIR = Path.of("uploads").toAbsolutePath().normalize();
-    private static final Path CHAT_HISTORY_FILE = Path.of("chat_history.json");
     private static final Gson JSON = new GsonBuilder().setPrettyPrinting().create();
     private static final String PHOTO_EXTENSION = ".jpg"; // Assuming all photos are JPEGs; adjust as needed
 
     public static Connection connect() throws SQLException {
         return DriverManager.getConnection(System.getProperty("marketplace.database.url", URL));
+    }
+
+    private static Path chatHistoryFile() {
+        return Path.of(System.getProperty("marketplace.chat.history.path", "chat_history.json"));
     }
 
     private static void runSql(String sql) {
@@ -115,6 +118,31 @@ public class DatabaseManager {
                 chatbox_id STRING NOT NULL,
                 PRIMARY KEY(buyer_username, listing_id)
             )
+            """);
+        runSql("""
+                CREATE TABLE IF NOT EXISTS listing_requests (
+                    request_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    buyer_username TEXT NOT NULL REFERENCES users(username),
+                    listing_id INTEGER NOT NULL REFERENCES listings(listing_id),
+                    request_type TEXT NOT NULL CHECK(request_type IN ('OFFER', 'BORROW', 'CLAIM')),
+                    offer_price REAL,
+                    proposed_days INTEGER,
+                    status TEXT NOT NULL DEFAULT 'PENDING'
+                        CHECK(status IN ('PENDING', 'ACCEPTED', 'DECLINED', 'COUNTERED')),
+                    counter_price REAL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """);
+        runSql("""
+                CREATE TABLE IF NOT EXISTS request_messages (
+                    message_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    request_id INTEGER NOT NULL REFERENCES listing_requests(request_id) ON DELETE CASCADE,
+                    sender_username TEXT NOT NULL REFERENCES users(username),
+                    sender_role TEXT NOT NULL CHECK(sender_role IN ('BUYER', 'SELLER')),
+                    content TEXT NOT NULL,
+                    timestamp TEXT NOT NULL
+                )
             """);
 
         runSql("""
@@ -977,6 +1005,288 @@ public class DatabaseManager {
         return fetchQuery(sql, buyerUsername);
     }
 
+    public static int createListingRequest(String buyerUsername, int listingId, String requestType,
+                                           Double offerPrice, Integer proposedDays) {
+        String normalizedType = requestType == null ? "" : requestType.toUpperCase();
+        if (!List.of("OFFER", "BORROW", "CLAIM").contains(normalizedType)) {
+            throw new IllegalArgumentException("Invalid request type.");
+        }
+        LocalDateTime now = LocalDateTime.now();
+        String insertRequest = """
+                INSERT INTO listing_requests
+                    (buyer_username, listing_id, request_type, offer_price, proposed_days, created_at, updated_at)
+                SELECT ?, l.listing_id, ?, ?, ?, ?, ?
+                FROM listings l
+                WHERE l.listing_id = ? AND l.listing_status = 'LIVE'
+                    AND l.availability_status = 'Available'
+                    AND ((? = 'OFFER' AND l.listing_type = 'SELL')
+                        OR (? = 'BORROW' AND l.listing_type = 'LEND')
+                        OR (? = 'CLAIM' AND l.listing_type = 'GIVEAWAY'))
+                """;
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            try (PreparedStatement statement = connection.prepareStatement(
+                    insertRequest, Statement.RETURN_GENERATED_KEYS)) {
+                statement.setString(1, buyerUsername);
+                statement.setString(2, normalizedType);
+                if (offerPrice == null) statement.setNull(3, Types.REAL);
+                else statement.setDouble(3, offerPrice);
+                if (proposedDays == null) statement.setNull(4, Types.INTEGER);
+                else statement.setInt(4, proposedDays);
+                statement.setString(5, now.toString());
+                statement.setString(6, now.toString());
+                statement.setInt(7, listingId);
+                statement.setString(8, normalizedType);
+                statement.setString(9, normalizedType);
+                statement.setString(10, normalizedType);
+                if (statement.executeUpdate() != 1) {
+                    throw new IllegalStateException("This listing is no longer available for requests.");
+                }
+                int requestId;
+                try (ResultSet keys = statement.getGeneratedKeys()) {
+                    if (!keys.next()) throw new SQLException("Request ID was not generated.");
+                    requestId = keys.getInt(1);
+                }
+                String seller = fetchString(connection,
+                        "SELECT seller FROM listings WHERE listing_id = ?", listingId);
+                String itemName = fetchString(connection,
+                        "SELECT item_name FROM listings WHERE listing_id = ?", listingId);
+                insertNotification(connection, seller, buyerUsername, "New " + normalizedType.toLowerCase() + " request",
+                        buyerUsername + " submitted a " + normalizedType.toLowerCase()
+                                + " request for " + itemName + ".", "Offer");
+                connection.commit();
+                return requestId;
+            } catch (RuntimeException | SQLException e) {
+                connection.rollback();
+                throw e;
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not submit listing request.", e);
+        }
+    }
+
+    public static List<Map<String, Object>> fetchSellerPendingRequests(String sellerUsername) {
+        return fetchQuery("""
+                SELECT r.request_id, r.buyer_username, buyer.full_name AS buyer_name, r.listing_id,
+                       r.request_type, r.offer_price, r.proposed_days, r.status, r.counter_price,
+                       r.created_at, r.updated_at, l.item_name, l.listing_type, l.listing_status
+                FROM listing_requests r
+                JOIN listings l ON l.listing_id = r.listing_id
+                JOIN users buyer ON buyer.username = r.buyer_username
+                WHERE l.seller = ? AND r.status = 'PENDING'
+                ORDER BY r.created_at
+                """, sellerUsername);
+    }
+
+    public static List<Map<String, Object>> fetchBuyerRequests(String buyerUsername) {
+        return fetchQuery("""
+                SELECT r.request_id, r.buyer_username, r.listing_id, r.request_type, r.offer_price,
+                       r.proposed_days, r.status, r.counter_price, r.created_at, r.updated_at,
+                       l.item_name, l.listing_type, l.listing_status, l.seller,
+                       seller.full_name AS seller_name
+                FROM listing_requests r
+                JOIN listings l ON l.listing_id = r.listing_id
+                JOIN users seller ON seller.username = l.seller
+                WHERE r.buyer_username = ?
+                ORDER BY r.created_at DESC
+                """, buyerUsername);
+    }
+
+    public static void resolveListingRequest(String sellerUsername, int requestId, String action,
+                                             Double counterPrice) {
+        String normalizedAction = action == null ? "" : action.toUpperCase();
+        if (!List.of("ACCEPT", "DECLINE", "COUNTER").contains(normalizedAction)) {
+            throw new IllegalArgumentException("Invalid request action.");
+        }
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            try {
+                Map<String, Object> request = fetchRequestForSeller(connection, sellerUsername, requestId);
+                if (request == null || !"PENDING".equals(request.get("status"))) {
+                    throw new IllegalStateException("This request is no longer pending.");
+                }
+                String buyer = (String) request.get("buyer_username");
+                int listingId = ((Number) request.get("listing_id")).intValue();
+                String itemName = (String) request.get("item_name");
+                String newStatus = switch (normalizedAction) {
+                    case "ACCEPT" -> "ACCEPTED";
+                    case "DECLINE" -> "DECLINED";
+                    default -> "COUNTERED";
+                };
+                LocalDateTime now = LocalDateTime.now();
+
+                if ("ACCEPT".equals(normalizedAction)) {
+                    String listingStatus = switch ((String) request.get("listing_type")) {
+                        case "SELL" -> "RESERVED";
+                        case "LEND" -> "LENT";
+                        case "GIVEAWAY" -> "GIVEN";
+                        default -> throw new IllegalStateException("Unsupported listing type.");
+                    };
+                    try (PreparedStatement update = connection.prepareStatement("""
+                            UPDATE listings SET listing_status = ?, availability_status = 'Unavailable'
+                            WHERE listing_id = ? AND seller = ? AND listing_status = 'LIVE'
+                                AND availability_status = 'Available'
+                            """)) {
+                        update.setString(1, listingStatus);
+                        update.setInt(2, listingId);
+                        update.setString(3, sellerUsername);
+                        if (update.executeUpdate() != 1) {
+                            throw new IllegalStateException("This listing is no longer available.");
+                        }
+                    }
+                }
+
+                try (PreparedStatement update = connection.prepareStatement("""
+                        UPDATE listing_requests
+                        SET status = ?, counter_price = ?, updated_at = ?
+                        WHERE request_id = ? AND status = 'PENDING'
+                        """)) {
+                    update.setString(1, newStatus);
+                    if ("COUNTER".equals(normalizedAction)) update.setDouble(2, counterPrice);
+                    else update.setNull(2, Types.REAL);
+                    update.setString(3, now.toString());
+                    update.setInt(4, requestId);
+                    if (update.executeUpdate() != 1) {
+                        throw new IllegalStateException("This request is no longer pending.");
+                    }
+                }
+
+                String title = switch (normalizedAction) {
+                    case "ACCEPT" -> "Request accepted";
+                    case "DECLINE" -> "Request declined";
+                    default -> "Seller sent a counteroffer";
+                };
+                String message = switch (normalizedAction) {
+                    case "ACCEPT" -> "Your request for " + itemName + " was accepted.";
+                    case "DECLINE" -> "Your request for " + itemName + " was declined.";
+                    default -> "The seller countered your offer for " + itemName
+                            + " at HK$" + counterPrice + ".";
+                };
+                insertNotification(connection, buyer, sellerUsername, title, message, "Offer");
+
+                if ("ACCEPT".equals(normalizedAction)) {
+                    try (PreparedStatement updateOthers = connection.prepareStatement("""
+                            UPDATE listing_requests SET status = 'DECLINED', updated_at = ?
+                            WHERE listing_id = ? AND request_id <> ? AND status = 'PENDING'
+                            """)) {
+                        updateOthers.setString(1, now.toString());
+                        updateOthers.setInt(2, listingId);
+                        updateOthers.setInt(3, requestId);
+                        updateOthers.executeUpdate();
+                    }
+                    try (PreparedStatement others = connection.prepareStatement("""
+                            SELECT buyer_username FROM listing_requests
+                            WHERE listing_id = ? AND request_id <> ? AND status = 'DECLINED'
+                                AND updated_at = ?
+                            """)) {
+                        others.setInt(1, listingId);
+                        others.setInt(2, requestId);
+                        others.setString(3, now.toString());
+                        try (ResultSet results = others.executeQuery()) {
+                            while (results.next()) {
+                                insertNotification(connection, results.getString("buyer_username"), sellerUsername,
+                                        "Listing no longer available",
+                                        itemName + " is no longer available because another request was accepted.",
+                                        "Offer");
+                            }
+                        }
+                    }
+                }
+                connection.commit();
+            } catch (RuntimeException | SQLException e) {
+                connection.rollback();
+                throw e;
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not update listing request.", e);
+        }
+    }
+
+    public static List<Map<String, Object>> fetchRequestMessages(int requestId) {
+        return fetchQuery("""
+                SELECT sender_username, sender_role, content, timestamp
+                FROM request_messages WHERE request_id = ? ORDER BY message_id
+                """, requestId);
+    }
+
+    public static boolean isRequestParticipant(String username, int requestId) {
+        return !fetchQuery("""
+                SELECT 1 FROM listing_requests r
+                JOIN listings l ON l.listing_id = r.listing_id
+                WHERE r.request_id = ? AND (r.buyer_username = ? OR l.seller = ?)
+                """, requestId, username, username).isEmpty();
+    }
+
+    public static void appendRequestMessage(int requestId, String senderUsername,
+                                            String senderRole, String content) {
+        try (Connection connection = connect();
+             PreparedStatement statement = connection.prepareStatement("""
+                     INSERT INTO request_messages
+                         (request_id, sender_username, sender_role, content, timestamp)
+                     SELECT ?, ?, ?, ?, ?
+                     WHERE EXISTS (
+                         SELECT 1 FROM listing_requests r JOIN listings l ON l.listing_id = r.listing_id
+                         WHERE r.request_id = ? AND (r.buyer_username = ? OR l.seller = ?)
+                     )
+                     """)) {
+            statement.setInt(1, requestId);
+            statement.setString(2, senderUsername);
+            statement.setString(3, senderRole);
+            statement.setString(4, content);
+            statement.setString(5, LocalDateTime.now().toString());
+            statement.setInt(6, requestId);
+            statement.setString(7, senderUsername);
+            statement.setString(8, senderUsername);
+            if (statement.executeUpdate() != 1) {
+                throw new SecurityException("You are not a participant in this request.");
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not send request message.", e);
+        }
+    }
+
+    private static Map<String, Object> fetchRequestForSeller(Connection connection, String sellerUsername,
+                                                              int requestId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT r.request_id, r.buyer_username, r.listing_id, r.request_type, r.offer_price,
+                       r.proposed_days, r.status, l.item_name, l.listing_type
+                FROM listing_requests r JOIN listings l ON l.listing_id = r.listing_id
+                WHERE r.request_id = ? AND l.seller = ?
+                """)) {
+            statement.setInt(1, requestId);
+            statement.setString(2, sellerUsername);
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next() ? resultSetToMap(result) : null;
+            }
+        }
+    }
+
+    private static String fetchString(Connection connection, String sql, int value) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setInt(1, value);
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next()) throw new SQLException("Expected listing data was not found.");
+                return result.getString(1);
+            }
+        }
+    }
+
+    private static void insertNotification(Connection connection, String username, String sender,
+                                           String title, String message, String category) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                INSERT INTO notifications (username, sender, title, message, category, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """)) {
+            statement.setString(1, username);
+            statement.setString(2, sender);
+            statement.setString(3, title);
+            statement.setString(4, message);
+            statement.setString(5, category);
+            statement.setString(6, LocalDateTime.now().toString());
+            statement.executeUpdate();
+        }
+    }
+
     public static List<Listing> fetchFavouriteListings(String buyerUsername) {
         String sql = """
             SELECT l.* FROM listings l
@@ -1311,134 +1621,162 @@ public class DatabaseManager {
         }
     }
 
-    public static ChatHistory fetchChatHistoryOf(String listingId) {
-    if (listingId == null || listingId.isBlank()) {
-        throw new IllegalArgumentException("Listing ID must not be blank");
-    }
+    public static ChatHistory fetchChatHistoryOf(String listingId, String buyerUsername) {
+        validateChatIdentity(listingId, buyerUsername);
+        Path chatHistoryFile = chatHistoryFile();
+        if (!Files.exists(chatHistoryFile)) return null;
 
-    if (!Files.exists(CHAT_HISTORY_FILE)) {
-        return null;
-    }
-
-    try {
-        JsonObject history = JsonParser.parseString(
-                Files.readString(CHAT_HISTORY_FILE, StandardCharsets.UTF_8)
-        ).getAsJsonObject();
-
-        if (!history.has(listingId)) {
-            return null;
-        }
-
-        JsonObject listingHistory = history.getAsJsonObject(listingId);
-        List<Message> messages = new ArrayList<>();
-
-        for (var element : listingHistory.getAsJsonArray("messages")) {
-            JsonObject messageJson = element.getAsJsonObject();
-
-            Message message = new Message();
-            message.setTimestamp(
-                    LocalDateTime.parse(messageJson.get("timestamp").getAsString()));
-            message.setSender_id(messageJson.get("user").getAsString());
-            message.setSender_role(messageJson.get("role").getAsString());
-            message.setContent(messageJson.get("content").getAsString());
-            messages.add(message);
-        }
-
-        return new ChatHistory(
-                listingId,
-                messages,
-                listingHistory.get("seen_buyer").getAsBoolean(),
-                listingHistory.get("seen_seller").getAsBoolean()
-        );
-    } catch (IOException | JsonParseException | IllegalStateException e) {
-        throw new IllegalStateException("Could not read chat history", e);
-    }
-}
-
-    public static void appendMessageToChatHistory(String listingId, Message message) {
-        if (listingId == null || listingId.isBlank()) {
-            throw new IllegalArgumentException("Listing ID must not be blank");
-        }
-        if (message == null) {
-            throw new IllegalArgumentException("Message must not be null");
-        }
-
-        JsonObject history;
         try {
-            if (Files.exists(CHAT_HISTORY_FILE)) {
-                history = JsonParser.parseString(
-                        Files.readString(CHAT_HISTORY_FILE, StandardCharsets.UTF_8)).getAsJsonObject();
-            } else {
-                history = new JsonObject();
+            JsonObject history = JsonParser.parseString(
+                    Files.readString(chatHistoryFile, StandardCharsets.UTF_8)).getAsJsonObject();
+            if (!history.has(listingId)) return null;
+            JsonObject listingHistory = history.getAsJsonObject(listingId);
+            JsonObject conversation = listingHistory.has("conversations")
+                    ? listingHistory.getAsJsonObject("conversations").getAsJsonObject(buyerUsername)
+                    : null;
+            if (conversation != null) {
+                return toChatHistory(listingId, conversation, false);
             }
+
+            // Legacy listing-wide chats are filtered to this buyer's own messages only.
+            if (!listingHistory.has("messages")) return null;
+            JsonArray ownMessages = new JsonArray();
+            for (var element : listingHistory.getAsJsonArray("messages")) {
+                JsonObject message = element.getAsJsonObject();
+                if ("buyer".equalsIgnoreCase(message.get("role").getAsString())
+                        && buyerUsername.equalsIgnoreCase(message.get("user").getAsString())) {
+                    ownMessages.add(message.deepCopy());
+                }
+            }
+            return ownMessages.isEmpty() ? null : toChatHistory(listingId,
+                    newChatObject(ownMessages), true);
         } catch (IOException | JsonParseException | IllegalStateException e) {
             throw new IllegalStateException("Could not read chat history", e);
         }
+    }
 
+    public static List<String> fetchChatBuyerUsernames(String listingId) {
+        if (listingId == null || listingId.isBlank()) {
+            throw new IllegalArgumentException("Listing ID must not be blank");
+        }
+        Path chatHistoryFile = chatHistoryFile();
+        if (!Files.exists(chatHistoryFile)) return List.of();
+        try {
+            JsonObject history = JsonParser.parseString(
+                    Files.readString(chatHistoryFile, StandardCharsets.UTF_8)).getAsJsonObject();
+            if (!history.has(listingId)) return List.of();
+            JsonObject listingHistory = history.getAsJsonObject(listingId);
+            java.util.LinkedHashSet<String> buyers = new java.util.LinkedHashSet<>();
+            if (listingHistory.has("conversations")) {
+                buyers.addAll(listingHistory.getAsJsonObject("conversations").keySet());
+            }
+            if (listingHistory.has("messages")) {
+                for (var element : listingHistory.getAsJsonArray("messages")) {
+                    JsonObject message = element.getAsJsonObject();
+                    if ("buyer".equalsIgnoreCase(message.get("role").getAsString())) {
+                        buyers.add(message.get("user").getAsString());
+                    }
+                }
+            }
+            return List.copyOf(buyers);
+        } catch (IOException | JsonParseException | IllegalStateException e) {
+            throw new IllegalStateException("Could not read chat participants", e);
+        }
+    }
+
+    public static void appendMessageToChatHistory(String listingId, String buyerUsername, Message message) {
+        validateChatIdentity(listingId, buyerUsername);
+        if (message == null) throw new IllegalArgumentException("Chat message must not be null");
+
+        JsonObject history = readChatHistoryFile();
         JsonObject listingHistory = history.has(listingId)
-                ? history.getAsJsonObject(listingId)
-                : new JsonObject();
-        JsonArray messages = listingHistory.has("messages")
-                ? listingHistory.getAsJsonArray("messages")
-                : new JsonArray();
-
+                ? history.getAsJsonObject(listingId) : new JsonObject();
+        JsonObject conversations = listingHistory.has("conversations")
+                ? listingHistory.getAsJsonObject("conversations") : new JsonObject();
+        JsonObject conversation = conversations.has(buyerUsername)
+                ? conversations.getAsJsonObject(buyerUsername) : newChatObject(new JsonArray());
+        JsonArray messages = conversation.getAsJsonArray("messages");
         JsonObject messageJson = new JsonObject();
         messageJson.addProperty("timestamp", message.getTimestamp().toString());
         messageJson.addProperty("user", message.getSender_id());
         messageJson.addProperty("role", message.getSender_role());
         messageJson.addProperty("content", message.getContent());
         messages.add(messageJson);
-
-        listingHistory.add("messages", messages);
-        if (!listingHistory.has("seen_buyer")) {
-            listingHistory.addProperty("seen_buyer", false);
-        }
-        if (!listingHistory.has("seen_seller")) {
-            listingHistory.addProperty("seen_seller", false);
-        }
+        conversation.add("messages", messages);
+        conversations.add(buyerUsername, conversation);
+        listingHistory.add("conversations", conversations);
+        listingHistory.remove("messages");
+        listingHistory.remove("seen_buyer");
+        listingHistory.remove("seen_seller");
         history.add(listingId, listingHistory);
+        writeChatHistoryFile(history);
+    }
 
+    public static void markChatHistorySeen(String listingId, String buyerUsername, String role) {
+        validateChatIdentity(listingId, buyerUsername);
+        if (!"buyer".equals(role) && !"seller".equals(role)) {
+            throw new IllegalArgumentException("Chat role must be buyer or seller");
+        }
+        JsonObject history = readChatHistoryFile();
+        JsonObject listingHistory = history.has(listingId)
+                ? history.getAsJsonObject(listingId) : new JsonObject();
+        JsonObject conversations = listingHistory.has("conversations")
+                ? listingHistory.getAsJsonObject("conversations") : new JsonObject();
+        JsonObject conversation = conversations.has(buyerUsername)
+                ? conversations.getAsJsonObject(buyerUsername) : newChatObject(new JsonArray());
+        conversation.addProperty("seen_" + role, true);
+        conversations.add(buyerUsername, conversation);
+        listingHistory.add("conversations", conversations);
+        history.add(listingId, listingHistory);
+        writeChatHistoryFile(history);
+    }
+
+    private static ChatHistory toChatHistory(String listingId, JsonObject conversation, boolean legacy) {
+        List<Message> messages = new ArrayList<>();
+        for (var element : conversation.getAsJsonArray("messages")) {
+            JsonObject messageJson = element.getAsJsonObject();
+            Message message = new Message();
+            message.setTimestamp(LocalDateTime.parse(messageJson.get("timestamp").getAsString()));
+            message.setSender_id(messageJson.get("user").getAsString());
+            message.setSender_role(messageJson.get("role").getAsString());
+            message.setContent(messageJson.get("content").getAsString());
+            messages.add(message);
+        }
+        return new ChatHistory(listingId, messages,
+                !legacy && conversation.has("seen_buyer") && conversation.get("seen_buyer").getAsBoolean(),
+                !legacy && conversation.has("seen_seller") && conversation.get("seen_seller").getAsBoolean());
+    }
+
+    private static JsonObject newChatObject(JsonArray messages) {
+        JsonObject conversation = new JsonObject();
+        conversation.add("messages", messages);
+        conversation.addProperty("seen_buyer", false);
+        conversation.addProperty("seen_seller", false);
+        return conversation;
+    }
+
+    private static JsonObject readChatHistoryFile() {
+        Path file = chatHistoryFile();
         try {
-            Files.writeString(CHAT_HISTORY_FILE, JSON.toJson(history), StandardCharsets.UTF_8);
+            return Files.exists(file)
+                    ? JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8)).getAsJsonObject()
+                    : new JsonObject();
+        } catch (IOException | JsonParseException | IllegalStateException e) {
+            throw new IllegalStateException("Could not read chat history", e);
+        }
+    }
+
+    private static void writeChatHistoryFile(JsonObject history) {
+        try {
+            Files.writeString(chatHistoryFile(), JSON.toJson(history), StandardCharsets.UTF_8);
         } catch (IOException e) {
             throw new IllegalStateException("Could not write chat history", e);
         }
     }
 
-    public static void markChatHistorySeen(String listingId, String role) {
-        if (listingId == null || listingId.isBlank()) {
-            throw new IllegalArgumentException("Listing ID must not be blank");
-        }
-        if (!"buyer".equals(role) && !"seller".equals(role)) {
-            throw new IllegalArgumentException("Chat role must be buyer or seller");
-        }
-
-        JsonObject history;
-        try {
-            if (Files.exists(CHAT_HISTORY_FILE)) {
-                history = JsonParser.parseString(
-                        Files.readString(CHAT_HISTORY_FILE, StandardCharsets.UTF_8)).getAsJsonObject();
-            } else {
-                history = new JsonObject();
-            }
-
-            JsonObject listingHistory = history.has(listingId)
-                    ? history.getAsJsonObject(listingId)
-                    : new JsonObject();
-            if (!listingHistory.has("messages")) {
-                listingHistory.add("messages", new JsonArray());
-            }
-            if (!listingHistory.has("seen_buyer")) {
-                listingHistory.addProperty("seen_buyer", false);
-            }
-            if (!listingHistory.has("seen_seller")) {
-                listingHistory.addProperty("seen_seller", false);
-            }
-            listingHistory.addProperty("seen_" + role, true);
-            history.add(listingId, listingHistory);
-            Files.writeString(CHAT_HISTORY_FILE, JSON.toJson(history), StandardCharsets.UTF_8);
-        } catch (IOException | JsonParseException | IllegalStateException e) {
-            throw new IllegalStateException("Could not update chat history seen status", e);
+    private static void validateChatIdentity(String listingId, String buyerUsername) {
+        if (listingId == null || listingId.isBlank() || buyerUsername == null || buyerUsername.isBlank()) {
+            throw new IllegalArgumentException("Listing and buyer are required for a chat.");
         }
     }
 }

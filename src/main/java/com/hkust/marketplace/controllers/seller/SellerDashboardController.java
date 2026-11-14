@@ -26,6 +26,7 @@ import java.nio.file.Path;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 public class SellerDashboardController {
 
@@ -79,6 +80,55 @@ public class SellerDashboardController {
         ScrollPane scroll = new ScrollPane(root);
         scroll.setFitToWidth(true);
         contentPane.getChildren().add(scroll);
+    }
+
+    private String requestDescription(Map<String, Object> request) {
+        return switch ((String) request.get("request_type")) {
+            case "OFFER" -> "Offer: HK$" + request.get("offer_price");
+            case "BORROW" -> "Borrow request: " + request.get("proposed_days") + " days";
+            case "CLAIM" -> "Giveaway claim";
+            default -> "Request";
+        };
+    }
+
+    private void showRequestChat(int requestId) {
+        Dialog<Void> dialog = new Dialog<>();
+        dialog.setTitle("Request Chat");
+        dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+        VBox messages = new VBox(8);
+        messages.setPadding(new Insets(8));
+        ScrollPane scroll = new ScrollPane(messages);
+        scroll.setFitToWidth(true);
+        scroll.setPrefViewportHeight(300);
+        TextField input = new TextField();
+        input.setPromptText("Write a message...");
+        Button send = new Button("Send");
+        send.getStyleClass().add("btn-gold");
+        Runnable refresh = () -> {
+            messages.getChildren().clear();
+            try {
+                for (Map<String, Object> message : DataService.getRequestMessages(requestId)) {
+                    Label line = new Label(message.get("sender_username") + ": " + message.get("content"));
+                    line.setWrapText(true);
+                    messages.getChildren().add(line);
+                }
+                scroll.setVvalue(1);
+            } catch (IllegalStateException | SecurityException e) {
+                showProfileError("Could not load request chat: " + e.getMessage());
+            }
+        };
+        send.setOnAction(event -> {
+            try {
+                DataService.sendRequestMessage(requestId, input.getText());
+                input.clear();
+                refresh.run();
+            } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
+                showProfileError("Could not send message: " + e.getMessage());
+            }
+        });
+        dialog.getDialogPane().setContent(new VBox(8, scroll, new HBox(8, input, send)));
+        refresh.run();
+        dialog.showAndWait();
     }
 
     private HBox createListingRow(Listing l) {
@@ -383,13 +433,187 @@ public class SellerDashboardController {
                 new Label("Photos — select a photo to view it at full size"),
                 createPhotoGallery(listing.getPhotoPaths()));
 
+        Label requestsTitle = new Label("Incoming offers & requests");
+        requestsTitle.getStyleClass().add("section-title");
+        VBox requests = new VBox(10);
+        Label requestFeedback = new Label();
+        requestFeedback.setWrapText(true);
+        body.getChildren().addAll(new Separator(), requestsTitle, requestFeedback, requests);
+
+        Label chatTitle = new Label("Chat room");
+        chatTitle.getStyleClass().add("section-title");
+        body.getChildren().addAll(new Separator(), chatTitle, createSellerListingChat(listing));
+
         ScrollPane scroll = new ScrollPane(body);
         scroll.setFitToWidth(true);
         scroll.setPrefViewportWidth(720);
-        scroll.setPrefViewportHeight(520);
+        scroll.setPrefViewportHeight(650);
         dialog.getDialogPane().setContent(scroll);
         dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+        refreshListingRequests(listing, requests, requestFeedback);
         dialog.showAndWait();
+    }
+
+    private VBox createSellerListingChat(Listing listing) {
+        VBox chat = new VBox(8);
+        ComboBox<String> buyerSelector = new ComboBox<>();
+        buyerSelector.setPromptText("Select buyer conversation");
+        buyerSelector.setMaxWidth(Double.MAX_VALUE);
+        ListView<Message> messages = new ListView<>();
+        messages.setPrefHeight(220);
+        messages.setCellFactory(view -> new ListCell<>() {
+            @Override
+            protected void updateItem(Message message, boolean empty) {
+                super.updateItem(message, empty);
+                if (empty || message == null) {
+                    setText(null);
+                } else {
+                    String timestamp = message.getTimestamp() == null ? ""
+                            : message.getTimestamp().format(DateTimeFormatter.ofPattern("dd MMM HH:mm"));
+                    setText(message.getSender_id() + " (" + timestamp + ")\n" + message.getContent());
+                    setWrapText(true);
+                }
+            }
+        });
+        Label feedback = new Label();
+        feedback.setWrapText(true);
+        TextArea input = new TextArea();
+        input.setPromptText("Reply to the buyer...");
+        input.setPrefRowCount(2);
+        Button refresh = new Button("Refresh");
+        refresh.getStyleClass().add("btn-outline");
+        Button send = new Button("Send");
+        send.getStyleClass().add("btn-gold");
+
+        Runnable reloadMessages = () -> {
+            try {
+                String buyer = buyerSelector.getValue();
+                if (buyer == null) {
+                    messages.getItems().clear();
+                    feedback.setText("Select a buyer to view their chat.");
+                    return;
+                }
+                ChatHistory history = DataService.getSellerListingChat(listing.getId(), buyer);
+                messages.getItems().setAll(history == null || history.getMessages() == null
+                        ? List.of() : history.getMessages());
+                if (!messages.getItems().isEmpty()) {
+                    messages.scrollTo(messages.getItems().size() - 1);
+                }
+                feedback.setText(messages.getItems().isEmpty()
+                        ? "No messages in this conversation yet." : "");
+            } catch (IllegalStateException | SecurityException e) {
+                feedback.setText("Could not load chat: " + e.getMessage());
+            }
+        };
+        Runnable reloadBuyers = () -> {
+            try {
+                String selected = buyerSelector.getValue();
+                List<String> buyers = DataService.getSellerListingChatBuyers(listing.getId());
+                buyerSelector.getItems().setAll(buyers);
+                if (selected != null && buyers.contains(selected)) {
+                    buyerSelector.setValue(selected);
+                } else if (!buyers.isEmpty()) {
+                    buyerSelector.setValue(buyers.get(0));
+                } else {
+                    buyerSelector.setValue(null);
+                }
+                reloadMessages.run();
+            } catch (IllegalStateException | SecurityException e) {
+                feedback.setText("Could not load chat participants: " + e.getMessage());
+            }
+        };
+        buyerSelector.valueProperty().addListener((observable, oldValue, newValue) ->
+                reloadMessages.run());
+        refresh.setOnAction(event -> reloadBuyers.run());
+        send.setOnAction(event -> {
+            try {
+                String buyer = buyerSelector.getValue();
+                if (buyer == null) {
+                    feedback.setText("Select a buyer conversation before sending a message.");
+                    return;
+                }
+                DataService.sendSellerListingChatMessage(listing.getId(), buyer, input.getText());
+                input.clear();
+                reloadMessages.run();
+            } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
+                feedback.setText("Could not send message: " + e.getMessage());
+            }
+        });
+        chat.getChildren().addAll(new Label("Buyer"), buyerSelector, messages, feedback,
+                input, new HBox(8, refresh, send));
+        reloadBuyers.run();
+        return chat;
+    }
+
+    private void refreshListingRequests(Listing listing, VBox requests, Label feedback) {
+        requests.getChildren().clear();
+        try {
+            List<Map<String, Object>> incoming = DataService.getPendingSellerRequests().stream()
+                    .filter(request -> listing.getId().equals(
+                            String.valueOf(request.get("listing_id"))))
+                    .toList();
+            if (incoming.isEmpty()) {
+                requests.getChildren().add(new Label("No pending offers or requests for this listing."));
+                return;
+            }
+            for (Map<String, Object> request : incoming) {
+                VBox card = new VBox(8);
+                card.getStyleClass().add("card");
+                card.setPadding(new Insets(12));
+                Label buyer = new Label("Buyer: " + request.get("buyer_name")
+                        + " (" + request.get("buyer_username") + ")");
+                buyer.setStyle("-fx-font-weight: bold;");
+                Label summary = new Label(requestDescription(request));
+                Button accept = new Button("Accept");
+                accept.getStyleClass().add("btn-gold");
+                Button decline = new Button("Decline");
+                decline.getStyleClass().add("btn-danger");
+                Button counter = new Button("Counter Offer");
+                counter.getStyleClass().add("btn-outline");
+                counter.setDisable(!"OFFER".equals(request.get("request_type")));
+                Button chat = new Button("Open Chat Room");
+                chat.getStyleClass().add("btn-outline");
+                int requestId = ((Number) request.get("request_id")).intValue();
+                accept.setOnAction(event -> resolveListingRequest(
+                        listing, requestId, "ACCEPT", null, requests, feedback));
+                decline.setOnAction(event -> resolveListingRequest(
+                        listing, requestId, "DECLINE", null, requests, feedback));
+                counter.setOnAction(event -> {
+                    TextInputDialog prompt = new TextInputDialog();
+                    prompt.setTitle("Counter Offer");
+                    prompt.setHeaderText("Counteroffer for " + listing.getTitle());
+                    prompt.setContentText("Your price (HK$):");
+                    prompt.showAndWait().ifPresent(value -> {
+                        try {
+                            resolveListingRequest(listing, requestId, "COUNTER",
+                                    Double.parseDouble(value), requests, feedback);
+                        } catch (NumberFormatException e) {
+                            feedback.setText("Enter a valid counteroffer amount.");
+                        }
+                    });
+                });
+                chat.setOnAction(event -> showRequestChat(requestId));
+                card.getChildren().addAll(buyer, summary, new HBox(8, accept, decline, counter, chat));
+                requests.getChildren().add(card);
+            }
+        } catch (IllegalStateException | SecurityException e) {
+            feedback.setText("Could not load incoming requests: " + e.getMessage());
+        }
+    }
+
+    private void resolveListingRequest(Listing listing, int requestId, String action, Double price,
+                                       VBox requests, Label feedback) {
+        try {
+            DataService.resolveSellerRequest(requestId, action, price);
+            feedback.setText(switch (action) {
+                case "ACCEPT" -> "Request accepted. The buyer has been notified.";
+                case "DECLINE" -> "Request declined. The buyer has been notified.";
+                default -> "Counteroffer sent to the buyer.";
+            });
+            refreshListingRequests(listing, requests, feedback);
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
+            feedback.setText("Could not update request: " + e.getMessage());
+        }
     }
 
     private FlowPane createPhotoGallery(List<String> paths) {
