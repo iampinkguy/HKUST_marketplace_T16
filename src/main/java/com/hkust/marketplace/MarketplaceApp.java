@@ -18,7 +18,7 @@ public class MarketplaceApp extends Application {
     @Override
     public void start(Stage primaryStage) {
         DatabaseManager.initialize();
-        DataService.seedUserIfMissing();
+        DataService.seedData();
         SceneManager.init(primaryStage);
         SceneManager.showWelcome();
         primaryStage.setTitle("HKUST Marketplace");
