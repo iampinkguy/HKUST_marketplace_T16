@@ -21,7 +21,6 @@ import static org.junit.Assert.*;
 /** Opt-in desktop tests: run with -Dmarketplace.uiTests=true in a desktop session. */
 public class AdminManageUsersScreenTest {
     @Rule public TemporaryFolder folder = new TemporaryFolder();
-    private static boolean started;
     private static String passwordHash;
     private Stage stage;
     private String oldUrl;
@@ -30,12 +29,8 @@ public class AdminManageUsersScreenTest {
     @BeforeClass public static void startToolkit() throws Exception {
         Assume.assumeTrue("Desktop UI tests are opt-in", Boolean.getBoolean("marketplace.uiTests"));
         passwordHash = DataService.hashPassword("TestPassword123");
-        CountDownLatch ready = new CountDownLatch(1);
-        Platform.startup(() -> { Platform.setImplicitExit(false); ready.countDown(); });
-        assertTrue(ready.await(10, TimeUnit.SECONDS));
-        started = true;
+        AdminFxTestSupport.startToolkit();
     }
-    @AfterClass public static void stopToolkit() { if (started) Platform.exit(); }
     @Before public void openScreen() throws Exception {
         oldUrl = System.getProperty("marketplace.database.url");
         System.setProperty("marketplace.database.url", "jdbc:sqlite:" + folder.getRoot().toPath().resolve("screen.db"));

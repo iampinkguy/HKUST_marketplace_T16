@@ -718,20 +718,66 @@ public class AdminDashboardController {
         contentPane.getChildren().clear();
         User user = SessionManager.getCurrentUser();
         VBox form = new VBox(12);
-        form.setMaxWidth(400);
+        form.setMaxWidth(460);
         form.getStyleClass().add("card");
         form.setPadding(new Insets(20));
         Label titleLbl = new Label("Admin Profile");
         titleLbl.getStyleClass().add("section-title");
         form.getChildren().add(titleLbl);
 
+        TextField username = new TextField(user != null ? user.getUsername() : "");
+        username.setId("profile-username");
+        username.setEditable(false);
         TextField name = new TextField(user != null ? user.getFullName() : "");
+        name.setId("profile-full-name");
         PasswordField pass = new PasswordField();
-        pass.setPromptText("New password (optional)");
+        pass.setId("profile-new-password");
+        pass.setPromptText("Leave blank to keep the current password");
+        Label rules = new Label("Password rules: at least 8 characters, with an uppercase letter, a lowercase letter, and a digit.");
+        rules.setId("profile-password-rules");
+        rules.setWrapText(true);
+        rules.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 12px;");
+        PasswordField confirm = new PasswordField();
+        confirm.setId("profile-confirm-password");
+        Label error = new Label();
+        error.setId("profile-error");
+        error.setStyle("-fx-text-fill: #c62828; -fx-font-size: 13px;");
+        error.setWrapText(true);
+        error.setVisible(false);
+        error.setManaged(false);
+        Label success = new Label();
+        success.setId("profile-success");
+        success.setStyle("-fx-text-fill: #2e7d32; -fx-font-size: 13px;");
+        success.setWrapText(true);
+        success.setVisible(false);
+        success.setManaged(false);
         Button save = new Button("Save");
+        save.setId("profile-save");
         save.getStyleClass().add("btn-success");
-        save.setOnAction(e -> new Alert(Alert.AlertType.INFORMATION, "Profile updated (demo).").showAndWait());
-        form.getChildren().addAll(new Label("Full Name"), name, new Label("New Password"), pass, save);
+        save.setOnAction(e -> {
+            error.setVisible(false);
+            error.setManaged(false);
+            success.setVisible(false);
+            success.setManaged(false);
+            try {
+                AdminProfileService.updateOwnProfile(name.getText(), pass.getText(), confirm.getText());
+                User updated = SessionManager.getCurrentUser();
+                name.setText(updated.getFullName());
+                welcomeLabel.setText("Admin: " + updated.getFullName());
+                pass.clear();
+                confirm.clear();
+                success.setText("Your profile was updated successfully.");
+                success.setVisible(true);
+                success.setManaged(true);
+            } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+                if (ex instanceof DataService.BuyerInputException input && input.isClearConfirmPassword()) confirm.clear();
+                error.setText(ex.getMessage());
+                error.setVisible(true);
+                error.setManaged(true);
+            }
+        });
+        form.getChildren().addAll(new Label("Username"), username, new Label("Full Name"), name,
+                new Label("New Password"), pass, rules, new Label("Confirm Password"), confirm, error, success, save);
         contentPane.getChildren().add(form);
     }
 
