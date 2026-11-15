@@ -1342,6 +1342,15 @@ public class DatabaseManager {
         }
     }
 
+    public static List<Integer> fetchFavouriteListingIds(String buyerUsername) {
+        List<Integer> ids = new ArrayList<>();
+        for (Map<String, Object> row : fetchQuery(
+                "SELECT listing_id FROM favourites WHERE buyer_username = ?", buyerUsername)) {
+            ids.add(((Number) row.get("listing_id")).intValue());
+        }
+        return ids;
+    }
+
     public static List<Listing> fetchFavouriteListings(String buyerUsername) {
         String sql = """
             SELECT l.* FROM listings l

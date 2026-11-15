@@ -861,6 +861,30 @@ public class DataService {
         return DatabaseManager.createBorrowRequest(buyer, id, start, end);
     }
 
+    public static List<Integer> getBuyerFavouriteIds() {
+        return DatabaseManager.fetchFavouriteListingIds(requireBuyer());
+    }
+
+    /** Saves or removes a buyer's heart on a marketplace listing. */
+    public static void setBuyerFavourite(String listingId, boolean favourite) {
+        String buyer = requireBuyer();
+        int id = parseListingId(listingId);
+        if (DatabaseManager.fetchRow("listings", "listing_id", id) == null) {
+            throw new IllegalArgumentException("Listing was not found.");
+        }
+        DatabaseManager.setFavourite(buyer, id, favourite);
+    }
+
+    public static List<Listing> getBuyerFavouriteListings() {
+        String buyer = requireBuyer();
+        List<Integer> hidden = DatabaseManager.fetchReportedListingIds(buyer);
+        List<Listing> favourites = new ArrayList<>();
+        for (Listing listing : DatabaseManager.fetchFavouriteListings(buyer)) {
+            if (!hidden.contains(Integer.parseInt(listing.getId()))) favourites.add(listing);
+        }
+        return favourites;
+    }
+
     public static List<Map<String, Object>> getBuyerDeals() {
         String buyer = requireBuyer();
         DatabaseManager.settleExpiredBorrows(buyer);

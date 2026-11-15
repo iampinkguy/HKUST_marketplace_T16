@@ -7,7 +7,6 @@ import com.hkust.marketplace.models.Message;
 import com.hkust.marketplace.models.Notification;
 import com.hkust.marketplace.models.User;
 import com.hkust.marketplace.utils.DataService;
-import com.hkust.marketplace.utils.DatabaseManager;
 import com.hkust.marketplace.utils.SceneManager;
 import com.hkust.marketplace.utils.SessionManager;
 import javafx.animation.KeyFrame;
@@ -18,6 +17,7 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.*;
 import javafx.scene.image.Image;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.*;
 import javafx.util.Duration;
@@ -173,7 +173,11 @@ public class BuyerDashboardController {
             empty.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 15px;");
             root.getChildren().addAll(tools, summary, empty);
         } else {
-            for (Listing listing : live) grid.getChildren().add(createListingCard(listing));
+            java.util.Set<Integer> favouriteIds = new java.util.HashSet<>(DataService.getBuyerFavouriteIds());
+            for (Listing listing : live) {
+                grid.getChildren().add(createListingCard(listing,
+                        favouriteIds.contains(Integer.parseInt(listing.getId()))));
+            }
             root.getChildren().addAll(tools, summary, grid);
         }
         return scroll(root);
@@ -241,7 +245,7 @@ public class BuyerDashboardController {
         });
     }
 
-    private VBox createListingCard(Listing listing) {
+    private VBox createListingCard(Listing listing, boolean favourited) {
         VBox card = new VBox(8);
         card.getStyleClass().add("listing-card");
         card.setPrefWidth(260);
@@ -268,7 +272,7 @@ public class BuyerDashboardController {
         HBox.setHgrow(spacer, Priority.ALWAYS);
         Label price = new Label(listing.getPriceDisplay());
         price.setStyle("-fx-font-weight: bold; -fx-text-fill: #003974; -fx-font-size: 16px;");
-        top.getChildren().addAll(typeBadge, spacer, price);
+        top.getChildren().addAll(typeBadge, spacer, price, heartButton(listing, favourited));
 
         card.getChildren().addAll(thumb, top,
                 styled(listing.getTitle(), "-fx-font-weight: bold; -fx-font-size: 15px; -fx-text-fill: #1a1a2e;"),
@@ -278,6 +282,34 @@ public class BuyerDashboardController {
                 styled("Posted: " + formatDate(listing.getPostedAt()), faint()),
                 styled("Status: " + text(listing.getAvailabilityStatus()), muted()));
         return card;
+    }
+
+    private Button heartButton(Listing listing, boolean favourited) {
+        Button heart = new Button();
+        heart.setFocusTraversable(false);
+        styleHeart(heart, favourited);
+        heart.setOnMouseClicked(MouseEvent::consume);
+        heart.setOnAction(event -> toggleFavourite(listing, heart));
+        return heart;
+    }
+
+    private void styleHeart(Button heart, boolean favourited) {
+        heart.setText(favourited ? "♥" : "♡");
+        heart.setStyle(favourited
+                ? "-fx-background-color: transparent; -fx-text-fill: #c62828; -fx-font-size: 20px; -fx-cursor: hand; -fx-padding: 0 4;"
+                : "-fx-background-color: transparent; -fx-text-fill: #9aa0b0; -fx-font-size: 20px; -fx-cursor: hand; -fx-padding: 0 4;");
+    }
+
+    private void toggleFavourite(Listing listing, Button heart) {
+        boolean favourite = "♡".equals(heart.getText());
+        try {
+            DataService.setBuyerFavourite(listing.getId(), favourite);
+            styleHeart(heart, favourite);
+            if (currentPage == Page.FAVOURITES) showFavourites();
+            else if (currentPage == Page.BROWSE) showBrowse();
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+            alert(Alert.AlertType.ERROR, ex.getMessage());
+        }
     }
 
     private void showListingDetail(String listingId, DetailMode mode) {
@@ -317,7 +349,17 @@ public class BuyerDashboardController {
             if (mode == DetailMode.DEAL || mode == DetailMode.FINISHED) showMyDeals();
             else showBrowse();
         });
-        header.getChildren().addAll(styled(listing.getTitle(), "-fx-font-size: 22px; -fx-font-weight: bold;"), spacer, close);
+        boolean favourited = false;
+        try {
+            favourited = DataService.getBuyerFavouriteIds().contains(Integer.parseInt(listing.getId()));
+        } catch (IllegalStateException | SecurityException | NumberFormatException ignored) {
+            favourited = false;
+        }
+        header.getChildren().addAll(
+                styled(listing.getTitle(), "-fx-font-size: 22px; -fx-font-weight: bold;"),
+                heartButton(listing, favourited),
+                spacer,
+                close);
 
         FlowPane photos = new FlowPane(10, 10);
         photos.setPrefWrapLength(880);
@@ -908,20 +950,24 @@ public class BuyerDashboardController {
 
     @FXML
     private void showFavourites() {
-        setActive(btnFavourites, "Favourites & Following");
+        setActive(btnFavourites, "Favourites");
         currentPage = Page.FAVOURITES;
         VBox root = new VBox(16);
         root.setPadding(new Insets(4));
         FlowPane grid = new FlowPane(16, 16);
-        User user = SessionManager.getCurrentUser();
-        List<Listing> favourites = user == null ? List.of() : DatabaseManager.fetchFavouriteListings(user.getUsername());
-        List<Integer> hidden = user == null ? List.of() : DatabaseManager.fetchReportedListingIds(user.getUsername());
-        favourites = favourites.stream()
-                .filter(listing -> !hidden.contains(Integer.parseInt(listing.getId())))
-                .toList();
-        if (favourites.isEmpty()) root.getChildren().add(new Label("No favourite listings yet."));
-        else {
-            for (Listing listing : favourites) grid.getChildren().add(createListingCard(listing));
+        grid.setPrefWrapLength(900);
+        List<Listing> favourites;
+        try {
+            favourites = DataService.getBuyerFavouriteListings();
+        } catch (IllegalStateException | SecurityException ex) {
+            root.getChildren().add(errorLabel(ex.getMessage()));
+            contentPane.getChildren().setAll(scroll(root));
+            return;
+        }
+        if (favourites.isEmpty()) {
+            root.getChildren().add(styled("No favourite listings yet. Tap the heart on a listing in Browse Marketplace.", muted()));
+        } else {
+            for (Listing listing : favourites) grid.getChildren().add(createListingCard(listing, true));
             root.getChildren().add(grid);
         }
         contentPane.getChildren().setAll(scroll(root));
