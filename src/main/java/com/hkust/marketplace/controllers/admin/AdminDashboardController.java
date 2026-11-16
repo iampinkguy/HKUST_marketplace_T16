@@ -588,30 +588,199 @@ public class AdminDashboardController {
         VBox root = new VBox(12);
         root.setPadding(new Insets(4));
 
-        HBox filters = new HBox(10);
+        FlowPane filters = new FlowPane(10, 8);
         filters.setAlignment(Pos.CENTER_LEFT);
         TextField search = new TextField();
-        search.setPromptText("Search by item / user...");
+        search.setId("deals-search");
+        search.setPromptText("Search item title / buyer / seller...");
+        search.setPrefWidth(260);
         ComboBox<String> typeFilter = new ComboBox<>(FXCollections.observableArrayList("All Types", "Sell", "Lend", "Giveaway"));
+        typeFilter.setId("deals-type");
         typeFilter.getSelectionModel().selectFirst();
-        filters.getChildren().addAll(search, typeFilter);
+        ComboBox<String> statusFilter = new ComboBox<>(FXCollections.observableArrayList("All Statuses", "Accepted", "Completed", "Returned"));
+        statusFilter.setId("deals-status");
+        statusFilter.getSelectionModel().selectFirst();
+        Button clear = new Button("Clear");
+        clear.setId("deals-clear");
+        clear.getStyleClass().add("btn-outline");
+        Button refresh = new Button("Refresh");
+        refresh.setId("deals-refresh");
+        refresh.getStyleClass().add("btn-outline");
+        filters.getChildren().addAll(search, new Label("Type"), typeFilter, new Label("Status"), statusFilter, clear, refresh);
         root.getChildren().add(filters);
+        Label count = new Label();
+        count.setId("deals-count");
+        root.getChildren().add(count);
+        Label error = new Label();
+        error.setId("deals-error");
+        error.setWrapText(true);
+        error.setStyle("-fx-text-fill: #c62828;");
+        error.setVisible(false);
+        error.setManaged(false);
+        root.getChildren().add(error);
 
-        TableView<String[]> table = new TableView<>();
+        TableView<DataService.DealRecord> table = new TableView<>();
+        table.setId("deals-table");
         table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
-        String[] headers = {"Item", "Buyer", "Seller", "Type", "Status", "Date"};
-        for (int i = 0; i < headers.length; i++) {
-            final int idx = i;
-            TableColumn<String[], String> col = new TableColumn<>(headers[i]);
-            col.setCellValueFactory(c -> new javafx.beans.property.SimpleStringProperty(c.getValue()[idx]));
-            table.getColumns().add(col);
-        }
-        table.setItems(FXCollections.observableArrayList(
-                new String[]{"Calculus Textbook", "alice", "charlie", "Sell", "Accepted", "2026-01-15"},
-                new String[]{"USB Hub", "bob", "diana", "Giveaway", "Completed", "2025-12-01"}
-        ));
+        table.getColumns().add(dealColumn("Item Title", DataService.DealRecord::itemTitle, 180));
+        table.getColumns().add(dealColumn("Buyer Username", DataService.DealRecord::buyerUsername, 125));
+        table.getColumns().add(dealColumn("Seller Username", DataService.DealRecord::sellerUsername, 125));
+        table.getColumns().add(dealColumn("Deal Type", d -> switch (d.dealType()) {
+            case SELL -> "Sell"; case LEND -> "Lend"; case GIVEAWAY -> "Giveaway";
+        }, 95));
+        table.getColumns().add(dealColumn("Start Date", d -> formatDealDate(d.startDate()), 155));
+        table.getColumns().add(dealColumn("Return/Complete Date", this::formatDealEndDate, 175));
+        table.getColumns().add(dealColumn("Status", DataService.DealRecord::status, 100));
+        table.setRowFactory(view -> {
+            TableRow<DataService.DealRecord> row = new TableRow<>();
+            row.cursorProperty().bind(javafx.beans.binding.Bindings.when(row.emptyProperty())
+                    .then(javafx.scene.Cursor.DEFAULT).otherwise(javafx.scene.Cursor.HAND));
+            row.setOnMouseClicked(event -> {
+                if (event.getButton() == javafx.scene.input.MouseButton.PRIMARY && event.getClickCount() == 1
+                        && !row.isEmpty()) showDealDetails(row.getItem().requestId());
+            });
+            return row;
+        });
+        table.setOnKeyPressed(event -> {
+            if (event.getCode() == javafx.scene.input.KeyCode.ENTER && table.getSelectionModel().getSelectedItem() != null) {
+                showDealDetails(table.getSelectionModel().getSelectedItem().requestId());
+                event.consume();
+            }
+        });
+        Runnable load = () -> {
+            ListingType type = switch (typeFilter.getValue()) {
+                case "Sell" -> ListingType.SELL;
+                case "Lend" -> ListingType.LEND;
+                case "Giveaway" -> ListingType.GIVEAWAY;
+                default -> null;
+            };
+            String status = "All Statuses".equals(statusFilter.getValue()) ? null : statusFilter.getValue();
+            error.setVisible(false);
+            error.setManaged(false);
+            try {
+                table.setItems(FXCollections.observableArrayList(DataService.getAllDeals(search.getText(), type, status)));
+                boolean filtered = !search.getText().isBlank() || type != null || status != null;
+                table.setPlaceholder(new Label(filtered ? "No deals match these filters." : "No deals recorded yet."));
+                int size = table.getItems().size();
+                count.setText(size + (size == 1 ? " deal" : " deals"));
+            } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+                table.getItems().clear();
+                table.setPlaceholder(new Label("Could not load deals. Use Refresh to try again."));
+                count.setText("Deals unavailable");
+                error.setText("Could not load deals. " + ex.getMessage());
+                error.setVisible(true);
+                error.setManaged(true);
+            }
+        };
+        search.textProperty().addListener((observable, previous, next) -> load.run());
+        typeFilter.valueProperty().addListener((observable, previous, next) -> load.run());
+        statusFilter.valueProperty().addListener((observable, previous, next) -> load.run());
+        clear.setOnAction(event -> {
+            search.clear();
+            typeFilter.getSelectionModel().selectFirst();
+            statusFilter.getSelectionModel().selectFirst();
+        });
+        refresh.setOnAction(event -> load.run());
+        load.run();
+        VBox.setVgrow(table, Priority.ALWAYS);
         root.getChildren().add(table);
+        Label dateNote = new Label("Start Date: borrow start, otherwise request creation. Return/Complete Date: scheduled return (due) for ongoing loans, actual return/completion for finished deals; — means not recorded.");
+        dateNote.setId("deals-date-note");
+        dateNote.setWrapText(true);
+        dateNote.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 12px;");
+        root.getChildren().add(dateNote);
+        Label detailsHint = new Label("Click a deal or select it and press Enter to view details.");
+        detailsHint.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 12px;");
+        root.getChildren().add(detailsHint);
         contentPane.getChildren().add(root);
+    }
+
+    private void showDealDetails(int requestId) {
+        try {
+            DataService.DealDetails details = DataService.getDealDetails(requestId);
+            DataService.DealRecord deal = details.deal();
+            Dialog<Void> dialog = new Dialog<>();
+            dialog.setTitle("Deal Details");
+            dialog.setHeaderText(deal.itemTitle());
+            dialog.initOwner(contentPane.getScene().getWindow());
+            dialog.setResizable(true);
+            dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+            GridPane facts = new GridPane();
+            facts.setHgap(18);
+            facts.setVgap(12);
+            facts.setPadding(new Insets(12));
+            ColumnConstraints values = new ColumnConstraints();
+            values.setHgrow(Priority.ALWAYS);
+            facts.getColumnConstraints().addAll(new ColumnConstraints(145), values);
+            dealFact(facts, "id", "Deal ID", Integer.toString(deal.requestId()));
+            dealFact(facts, "item", "Item Title", deal.itemTitle());
+            dealFact(facts, "buyer", "Buyer Username", deal.buyerUsername());
+            dealFact(facts, "seller", "Seller Username", deal.sellerUsername());
+            dealFact(facts, "type", "Deal Type", switch (deal.dealType()) {
+                case SELL -> "Sell"; case LEND -> "Lend"; case GIVEAWAY -> "Giveaway";
+            });
+            dealFact(facts, "status", "Status", deal.status());
+            dealFact(facts, "category", "Category", details.category());
+            dealFact(facts, "condition", "Condition", details.condition());
+            dealFact(facts, "description", "Description", details.description());
+            dealFact(facts, "meetup", "Meetup Location", details.meetupLocation());
+            dealFact(facts, "requested", "Requested At", formatDealDate(details.requestedAt()));
+            dealFact(facts, "start", "Start Date", formatDealDate(deal.startDate()));
+            if (deal.dealType() == ListingType.SELL) {
+                dealFact(facts, "price", "Agreed Price", details.offerPrice() == null ? null
+                        : String.format(java.util.Locale.ROOT, "HK$%.2f", details.offerPrice()));
+            } else if (deal.dealType() == ListingType.LEND) {
+                dealFact(facts, "borrow-end", "Borrow End", formatDealDate(details.borrowEnd()));
+                if (details.proposedDays() != null) dealFact(facts, "duration", "Lending Duration", details.proposedDays() + " days");
+                dealFact(facts, "scheduled", "Scheduled Return", formatDealDate(deal.scheduledReturnDate()));
+            }
+            dealFact(facts, "completed", deal.dealType() == ListingType.LEND ? "Actual Return" : "Completed At",
+                    formatDealDate(deal.completeDate()));
+            ScrollPane scroll = new ScrollPane(facts);
+            scroll.setFitToWidth(true);
+            scroll.setPrefViewportWidth(580);
+            scroll.setPrefViewportHeight(460);
+            dialog.getDialogPane().setContent(scroll);
+            dialog.show();
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+            Alert error = new Alert(Alert.AlertType.ERROR, ex.getMessage(), ButtonType.CLOSE);
+            error.initOwner(contentPane.getScene().getWindow());
+            error.setTitle("Deal Unavailable");
+            error.setHeaderText("Could not load deal details");
+            error.show();
+        }
+    }
+
+    private void dealFact(GridPane facts, String id, String title, String value) {
+        Label caption = new Label(title);
+        caption.setStyle("-fx-font-weight: bold;");
+        Label detail = new Label(value == null || value.isBlank() ? "—" : value);
+        detail.setId("deal-detail-" + id);
+        detail.setWrapText(true);
+        detail.setMaxWidth(Double.MAX_VALUE);
+        int row = facts.getRowCount();
+        facts.add(caption, 0, row);
+        facts.add(detail, 1, row);
+    }
+
+    private TableColumn<DataService.DealRecord, String> dealColumn(String title,
+            java.util.function.Function<DataService.DealRecord, String> value, double width) {
+        TableColumn<DataService.DealRecord, String> column = new TableColumn<>(title);
+        column.setPrefWidth(width);
+        column.setCellValueFactory(cell -> {
+            String text = value.apply(cell.getValue());
+            return new javafx.beans.property.SimpleStringProperty(text == null ? "—" : text);
+        });
+        return column;
+    }
+
+    private String formatDealDate(String date) { return date == null ? "—" : date.replace('T', ' '); }
+
+    private String formatDealEndDate(DataService.DealRecord deal) {
+        if (deal.completeDate() != null) return formatDealDate(deal.completeDate());
+        if (deal.scheduledReturnDate() == null) return "—";
+        String due = formatDealDate(deal.scheduledReturnDate());
+        return due.substring(0, Math.min(16, due.length())) + " (due)";
     }
 
     @FXML
@@ -718,20 +887,66 @@ public class AdminDashboardController {
         contentPane.getChildren().clear();
         User user = SessionManager.getCurrentUser();
         VBox form = new VBox(12);
-        form.setMaxWidth(400);
+        form.setMaxWidth(460);
         form.getStyleClass().add("card");
         form.setPadding(new Insets(20));
         Label titleLbl = new Label("Admin Profile");
         titleLbl.getStyleClass().add("section-title");
         form.getChildren().add(titleLbl);
 
+        TextField username = new TextField(user != null ? user.getUsername() : "");
+        username.setId("profile-username");
+        username.setEditable(false);
         TextField name = new TextField(user != null ? user.getFullName() : "");
+        name.setId("profile-full-name");
         PasswordField pass = new PasswordField();
-        pass.setPromptText("New password (optional)");
+        pass.setId("profile-new-password");
+        pass.setPromptText("Leave blank to keep the current password");
+        Label rules = new Label("Password rules: at least 8 characters, with an uppercase letter, a lowercase letter, and a digit.");
+        rules.setId("profile-password-rules");
+        rules.setWrapText(true);
+        rules.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 12px;");
+        PasswordField confirm = new PasswordField();
+        confirm.setId("profile-confirm-password");
+        Label error = new Label();
+        error.setId("profile-error");
+        error.setStyle("-fx-text-fill: #c62828; -fx-font-size: 13px;");
+        error.setWrapText(true);
+        error.setVisible(false);
+        error.setManaged(false);
+        Label success = new Label();
+        success.setId("profile-success");
+        success.setStyle("-fx-text-fill: #2e7d32; -fx-font-size: 13px;");
+        success.setWrapText(true);
+        success.setVisible(false);
+        success.setManaged(false);
         Button save = new Button("Save");
+        save.setId("profile-save");
         save.getStyleClass().add("btn-success");
-        save.setOnAction(e -> new Alert(Alert.AlertType.INFORMATION, "Profile updated (demo).").showAndWait());
-        form.getChildren().addAll(new Label("Full Name"), name, new Label("New Password"), pass, save);
+        save.setOnAction(e -> {
+            error.setVisible(false);
+            error.setManaged(false);
+            success.setVisible(false);
+            success.setManaged(false);
+            try {
+                AdminProfileService.updateOwnProfile(name.getText(), pass.getText(), confirm.getText());
+                User updated = SessionManager.getCurrentUser();
+                name.setText(updated.getFullName());
+                welcomeLabel.setText("Admin: " + updated.getFullName());
+                pass.clear();
+                confirm.clear();
+                success.setText("Your profile was updated successfully.");
+                success.setVisible(true);
+                success.setManaged(true);
+            } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+                if (ex instanceof DataService.BuyerInputException input && input.isClearConfirmPassword()) confirm.clear();
+                error.setText(ex.getMessage());
+                error.setVisible(true);
+                error.setManaged(true);
+            }
+        });
+        form.getChildren().addAll(new Label("Username"), username, new Label("Full Name"), name,
+                new Label("New Password"), pass, rules, new Label("Confirm Password"), confirm, error, success, save);
         contentPane.getChildren().add(form);
     }
 

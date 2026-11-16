@@ -9,6 +9,7 @@ import com.hkust.marketplace.models.ListingType;
 import com.hkust.marketplace.models.Message;
 import com.hkust.marketplace.models.Notification;
 import com.hkust.marketplace.models.Review;
+import com.hkust.marketplace.models.Deal;
 
 import java.nio.file.Path;
 import java.time.LocalDate;
@@ -16,6 +17,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -103,34 +105,97 @@ public class DataService {
         return user;
     }
 
-    /** Seeds the README demo accounts without changing accounts that already exist. */
-    public static void seedUserIfMissing() {
+    /** Seeds the supplied demo dataset once, without resetting existing records or changing the session. */
+    public static void seedData() {
+        String datasetKey = "marketplace-demo-v1";
+        if (DatabaseManager.fetchRow("demo_data_seed", "dataset_key", datasetKey) != null) return;
         record DemoUser(String username, String fullName, String password, UserRole role,
-                        String residenceHall, String bio, String preferredMeetup) {}
+                        String residenceHall, String bio, String preferredMeetup, double rating, int ratingCount) {}
 
         List<DemoUser> demoUsers = List.of(
                 new DemoUser("admin", "HKUST Marketplace Admin", "admin123", UserRole.ADMIN,
-                        null, null, null),
+                        null, null, null, 0, 0),
                 new DemoUser("alice", "Alice Chan", "password1", UserRole.BUYER,
-                        "Hall 3", null, null),
+                        "Hall 3", null, null, 0, 0),
                 new DemoUser("bob", "Bob Wong", "password1", UserRole.BUYER,
-                        "Off-campus", null, null),
+                        "Off-campus", null, null, 0, 0),
                 new DemoUser("charlie", "Charlie Lee", "password1", UserRole.SELLER,
-                        null, "Final year CSE student selling textbooks and gadgets.", "Library"),
+                        null, "Final year CSE student selling textbooks and gadgets.", "Library", 4.7, 12),
                 new DemoUser("diana", "Diana Ng", "password1", UserRole.SELLER,
-                        null, "Selling furniture and kitchen items before graduation.", "Hall 5 Lobby")
+                        null, "Selling furniture and kitchen items before graduation.", "Hall 5 Lobby", 4.3, 8)
         );
-
+        List<User> users = new ArrayList<>();
         for (DemoUser user : demoUsers) {
-            if (!DatabaseManager.usernameExists(user.username())) {
-                DatabaseManager.createUserIfMissing(user.username(), user.fullName(),
-                        hashPassword(user.password()), user.role().name(), user.residenceHall(),
-                        user.bio(), user.preferredMeetup());
-            }
+            User account = new User(user.username(), user.fullName(), hashPassword(user.password()), user.role());
+            account.setResidenceHall(user.residenceHall());
+            account.setBio(user.bio());
+            account.setPreferredMeetup(user.preferredMeetup());
+            account.setAverageRating(user.rating());
+            account.setRatingCount(user.ratingCount());
+            users.add(account);
         }
+
+        record DemoListing(String key, String title, String description, String category, ListingType type,
+                           String condition, Double price, Integer days, String meetup, String seller, ListingStatus status) {}
+        List<DemoListing> demoListings = List.of(
+                new DemoListing("calculus", "Calculus Textbook (Stewart)", "Barely used, 8th edition. Perfect for MATH 1013.",
+                        "Textbooks", ListingType.SELL, "Like New", 180.0, null, "Library", "charlie", ListingStatus.LIVE),
+                new DemoListing("charger", "MacBook Pro Charger 61W", "Original Apple charger, works perfectly.",
+                        "Electronics", ListingType.SELL, "Used", 250.0, null, "Academic Building (LG1)", "charlie", ListingStatus.LIVE),
+                new DemoListing("lamp", "IKEA Desk Lamp", "Good condition, LED bulb included.",
+                        "Furniture", ListingType.GIVEAWAY, "Used", null, null, "Hall 5 Lobby", "diana", ListingStatus.LIVE),
+                new DemoListing("calculator", "Graphing Calculator TI-84", "Can lend for one semester.",
+                        "Electronics", ListingType.LEND, "Like New", null, 90, "Student Centre", "diana", ListingStatus.LIVE),
+                new DemoListing("fridge", "Mini Fridge", "Works well, cleaning required.",
+                        "Furniture", ListingType.SELL, "Used", 400.0, null, "Hall 2 Lobby", "diana", ListingStatus.PENDING_REVIEW),
+                // Historical support record: reviews require a real listing ID in SQLite.
+                new DemoListing("chemistry", "Old Chemistry Book", "Historical listing for the sample review.",
+                        "Textbooks", ListingType.SELL, "Used", null, null, "Library", "charlie", ListingStatus.SOLD)
+        );
+        LocalDateTime now = LocalDateTime.now();
+        List<Listing> listings = new ArrayList<>();
+        for (DemoListing item : demoListings) {
+            Listing listing = new Listing();
+            listing.setId(item.key());
+            listing.setTitle(item.title());
+            listing.setDescription(item.description());
+            listing.setCategory(item.category());
+            listing.setType(item.type());
+            listing.setCondition(item.condition());
+            listing.setPrice(item.price());
+            listing.setLendingDays(item.days());
+            listing.setMeetupLocation(item.meetup());
+            listing.setSellerUsername(item.seller());
+            listing.setStatus(item.status());
+            listing.setAvailabilityStatus(item.status() == ListingStatus.SOLD ? "Unavailable" : "Available");
+            listing.setSubmittedAt(now);
+            listing.setPostedAt(item.status() == ListingStatus.PENDING_REVIEW ? null : now);
+            listings.add(listing);
+        }
+
+        Deal deal = new Deal();
+        deal.setListingId("calculus");
+        deal.setBuyerUsername("alice");
+        deal.setSellerUsername("charlie");
+        deal.setDealType(ListingType.SELL);
+        deal.setStatus("Accepted");
+        deal.setOfferPrice(160.0);
+        List<Notification> notifications = List.of(
+                new Notification("alice", "Offer Accepted", "Charlie accepted your offer of HK$160 for Calculus Textbook.", "Offer"),
+                new Notification("charlie", "New Offer Received", "Alice offered HK$160 for your Calculus Textbook.", "Offer"),
+                new Notification("diana", "Listing Pending", "Your Mini Fridge listing is awaiting admin review.", "System"),
+                new Notification("admin", "New Listing Submitted", "Diana submitted 'Mini Fridge' for review.", "System")
+        );
+        Review review = new Review();
+        review.setSellerUsername("charlie");
+        review.setBuyerUsername("bob");
+        review.setListingTitle("Old Chemistry Book");
+        review.setRating(5);
+        review.setComment("Very smooth transaction, book in excellent condition!");
+        DatabaseManager.seedData(datasetKey, users, listings, List.of(deal), notifications, List.of(review));
     }
 
-    /** Loads SQLite pending listings; no dummy listings are imported or seeded. */
+    /** Loads persisted pending listings from SQLite. */
     public static List<Listing> getPendingListings() {
         requireAdmin();
         List<Listing> listings = new ArrayList<>();
@@ -887,6 +952,84 @@ public class DataService {
             throw new IllegalArgumentException("You cannot request your own listing.");
         }
         return DatabaseManager.createBorrowRequest(buyer, id, start, end);
+    }
+
+    public record DealRecord(int requestId, String itemTitle, String buyerUsername, String sellerUsername,
+                             ListingType dealType, String startDate, String completeDate,
+                             String scheduledReturnDate, String status) {}
+
+    public record DealDetails(DealRecord deal, String category, String condition, String description,
+                              String meetupLocation, Double offerPrice, String borrowEnd,
+                              Integer proposedDays, String requestedAt) {}
+
+    /** Reloads a selected deal for read-only admin inspection. */
+    public static DealDetails getDealDetails(int requestId) {
+        requireAdmin();
+        var request = DatabaseManager.fetchRow("listing_requests", "request_id", requestId);
+        if (request == null || !"ACCEPTED".equals(request.get("status"))) {
+            throw new IllegalStateException("This deal is no longer available. Refresh the records.");
+        }
+        var listing = DatabaseManager.fetchRow("listings", "listing_id", request.get("listing_id"));
+        if (listing == null) throw new IllegalStateException("This deal's listing is no longer available. Refresh the records.");
+        return new DealDetails(toDealRecord(request, listing), (String) listing.get("category"),
+                (String) listing.get("item_condition"), (String) listing.get("description"),
+                (String) listing.get("meetup_location"),
+                request.get("offer_price") instanceof Number n ? n.doubleValue() : null,
+                (String) request.get("borrow_end"),
+                request.get("proposed_days") instanceof Number n ? n.intValue() : null,
+                (String) request.get("created_at"));
+    }
+
+    /**
+     * Read-only system-wide accepted deals, including completed/returned history; requires an active admin.
+     * Null type/status disables that filter. Search is a case-insensitive literal title/username match.
+     * Start date is borrow_start when present, otherwise request creation; complete date is the actual
+     * return/completion timestamp. Scheduled return is exposed separately for borrowed items.
+     */
+    public static List<DealRecord> getAllDeals(String search, ListingType type, String status) {
+        requireAdmin();
+        String needle = search == null ? "" : search.trim().toLowerCase(Locale.ROOT);
+        Map<Integer, Map<String, Object>> listings = new HashMap<>();
+        for (var row : DatabaseManager.fetchRows("listings", Map.of())) {
+            listings.put(((Number) row.get("listing_id")).intValue(), row);
+        }
+        List<DealRecord> deals = new ArrayList<>();
+        var requests = DatabaseManager.fetchRows("listing_requests", Map.of("status", "ACCEPTED"));
+        requests.sort(Comparator.comparing((Map<String, Object> row) -> {
+            Object at = row.get("returned_at");
+            if (at == null) at = row.get("completed_at");
+            if (at == null) at = row.get("updated_at");
+            if (at == null) at = row.get("created_at");
+            return at.toString().replace(' ', 'T');
+        }).reversed().thenComparing(row -> ((Number) row.get("request_id")).intValue(), Comparator.reverseOrder()));
+        for (var row : requests) {
+            var listing = listings.get(((Number) row.get("listing_id")).intValue());
+            if (listing == null) continue;
+            DealRecord deal = toDealRecord(row, listing);
+            if (type != null && type != deal.dealType()) continue;
+            if (status != null && !status.equals(deal.status())) continue;
+            if (!needle.isEmpty() && !deal.itemTitle().toLowerCase(Locale.ROOT).contains(needle)
+                    && !deal.buyerUsername().toLowerCase(Locale.ROOT).contains(needle)
+                    && !deal.sellerUsername().toLowerCase(Locale.ROOT).contains(needle)) continue;
+            deals.add(deal);
+        }
+        return deals;
+    }
+
+    private static DealRecord toDealRecord(Map<String, Object> row, Map<String, Object> listing) {
+        return new DealRecord(((Number) row.get("request_id")).intValue(),
+                (String) listing.get("item_name"), (String) row.get("buyer_username"), (String) listing.get("seller"),
+                switch ((String) row.get("request_type")) {
+                    case "OFFER" -> ListingType.SELL;
+                    case "BORROW" -> ListingType.LEND;
+                    case "CLAIM" -> ListingType.GIVEAWAY;
+                    default -> throw new IllegalStateException("Unsupported deal type.");
+                },
+                (String) (row.get("borrow_start") == null ? row.get("created_at") : row.get("borrow_start")),
+                (String) (row.get("returned_at") == null ? row.get("completed_at") : row.get("returned_at")),
+                "BORROW".equals(row.get("request_type"))
+                        ? (String) (row.get("due_at") == null ? row.get("borrow_end") : row.get("due_at")) : null,
+                row.get("returned_at") != null ? "Returned" : row.get("completed_at") != null ? "Completed" : "Accepted");
     }
 
     public static List<Map<String, Object>> getBuyerDeals() {
