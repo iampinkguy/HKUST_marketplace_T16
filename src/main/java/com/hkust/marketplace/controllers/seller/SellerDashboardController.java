@@ -26,6 +26,8 @@ import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.EnumMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -736,40 +738,73 @@ public class SellerDashboardController {
             return;
         }
 
-        // Metric cards
+        int totalViews = myListings.stream().mapToInt(Listing::getViewCount).sum();
+
         HBox metrics = new HBox(16);
         metrics.getChildren().addAll(
                 metricCard("Listings", String.valueOf(myListings.size()), "#003974"),
                 metricCard("Avg Rating", String.format("%.1f", user != null ? user.getAverageRating() : 0), "#A68137"),
                 metricCard("Reviews", String.valueOf(user != null ? user.getRatingCount() : 0), "#2e7d32"),
-                metricCard("Views (demo)", "128", "#1565c0")
+                metricCard("Views", String.valueOf(totalViews), "#1565c0")
         );
         root.getChildren().add(metrics);
 
-        // Bar chart
-        CategoryAxis xAxis = new CategoryAxis();
-        NumberAxis yAxis = new NumberAxis();
-        BarChart<String, Number> barChart = new BarChart<>(xAxis, yAxis);
-        barChart.setTitle("Listings by Category (demo data)");
-        barChart.setLegendVisible(false);
-        barChart.setPrefHeight(280);
-        XYChart.Series<String, Number> series = new XYChart.Series<>();
-        series.getData().add(new XYChart.Data<>("Textbooks", 3));
-        series.getData().add(new XYChart.Data<>("Electronics", 5));
-        series.getData().add(new XYChart.Data<>("Furniture", 2));
-        series.getData().add(new XYChart.Data<>("Others", 1));
-        barChart.getData().add(series);
+        if (myListings.isEmpty()) {
+            root.getChildren().add(styled("No listings yet.", "-fx-text-fill: #9aa0b0; -fx-font-size: 13px;"));
+        } else {
+            CategoryAxis xAxis = new CategoryAxis();
+            NumberAxis yAxis = new NumberAxis();
+            yAxis.setLabel("Listings");
+            yAxis.setForceZeroInRange(true);
+            yAxis.setMinorTickVisible(false);
+            BarChart<String, Number> barChart = new BarChart<>(xAxis, yAxis);
+            barChart.setTitle("Listings by Category");
+            barChart.setLegendVisible(false);
+            barChart.setPrefHeight(280);
+            barChart.setAnimated(false);
+            XYChart.Series<String, Number> series = new XYChart.Series<>();
+            int maxCategory = 0;
+            Map<String, Integer> categoryCounts = new LinkedHashMap<>();
+            for (String category : DataService.CATEGORIES) categoryCounts.put(category, 0);
+            for (Listing listing : myListings) {
+                String category = listing.getCategory() == null || listing.getCategory().isBlank()
+                        ? "Uncategorised" : listing.getCategory();
+                categoryCounts.merge(category, 1, Integer::sum);
+            }
+            for (Map.Entry<String, Integer> entry : categoryCounts.entrySet()) {
+                if (entry.getValue() == 0) continue;
+                series.getData().add(new XYChart.Data<>(entry.getKey(), entry.getValue()));
+                maxCategory = Math.max(maxCategory, entry.getValue());
+            }
+            int tick = maxCategory <= 8 ? 1 : (int) Math.ceil(maxCategory / 8.0);
+            yAxis.setAutoRanging(false);
+            yAxis.setLowerBound(0);
+            yAxis.setTickUnit(tick);
+            yAxis.setUpperBound(Math.ceil(maxCategory / (double) tick) * tick);
+            barChart.getData().add(series);
 
-        // Pie chart
-        PieChart pie = new PieChart();
-        pie.setTitle("Listing Status Distribution");
-        pie.setPrefHeight(280);
-        pie.getData().add(new PieChart.Data("Live", 4));
-        pie.getData().add(new PieChart.Data("Pending", 1));
-        pie.getData().add(new PieChart.Data("Sold", 2));
+            PieChart pie = new PieChart();
+            pie.setTitle("Listing Status");
+            pie.setPrefHeight(280);
+            pie.setAnimated(false);
+            pie.setLabelsVisible(true);
+            Map<ListingStatus, Integer> statusCounts = new EnumMap<>(ListingStatus.class);
+            for (Listing listing : myListings) {
+                if (listing.getStatus() != null) statusCounts.merge(listing.getStatus(), 1, Integer::sum);
+            }
+            for (ListingStatus status : ListingStatus.values()) {
+                int count = statusCounts.getOrDefault(status, 0);
+                if (count > 0) pie.getData().add(new PieChart.Data(statusLabel(status), count));
+            }
 
-        HBox charts = new HBox(20, barChart, pie);
-        root.getChildren().add(charts);
+            HBox.setHgrow(barChart, Priority.ALWAYS);
+            HBox.setHgrow(pie, Priority.ALWAYS);
+            barChart.setMaxWidth(Double.MAX_VALUE);
+            pie.setMaxWidth(Double.MAX_VALUE);
+            HBox charts = new HBox(20, barChart, pie);
+            charts.setFillHeight(true);
+            root.getChildren().add(charts);
+        }
 
         ScrollPane scroll = new ScrollPane(root);
         scroll.setFitToWidth(true);
@@ -788,6 +823,16 @@ public class SellerDashboardController {
         lbl.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 12px;");
         card.getChildren().addAll(val, lbl);
         return card;
+    }
+
+    private String statusLabel(ListingStatus status) {
+        String[] words = status.name().toLowerCase(Locale.ROOT).split("_");
+        StringBuilder label = new StringBuilder();
+        for (String word : words) {
+            if (!label.isEmpty()) label.append(' ');
+            label.append(Character.toUpperCase(word.charAt(0))).append(word.substring(1));
+        }
+        return label.toString();
     }
 
     @FXML
