@@ -7,7 +7,7 @@ public class Review {
     private String sellerUsername;
     private String buyerUsername;
     private String listingTitle;
-    private int rating; // 1-5
+    private double rating; // Buyer's original score, from 0.0 to 5.0.
     private String comment;
     private String sellerReply;
     private boolean hidden; // admin can hide
@@ -31,8 +31,11 @@ public class Review {
     public String getListingTitle() { return listingTitle; }
     public void setListingTitle(String listingTitle) { this.listingTitle = listingTitle; }
 
-    public int getRating() { return rating; }
+    /** Whole-star view retained for existing seller screens. */
+    public int getRating() { return (int) Math.round(rating); }
     public void setRating(int rating) { this.rating = rating; }
+    public double getScore() { return rating; }
+    public void setScore(double rating) { this.rating = rating; }
 
     public String getComment() { return comment; }
     public void setComment(String comment) { this.comment = comment; }

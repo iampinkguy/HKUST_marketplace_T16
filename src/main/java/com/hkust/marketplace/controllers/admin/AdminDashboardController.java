@@ -991,24 +991,71 @@ public class AdminDashboardController {
         VBox root = new VBox(12);
         root.setPadding(new Insets(4));
 
-        HBox filters = new HBox(10);
         TextField userFilter = new TextField();
-        userFilter.setPromptText("Filter by seller...");
-        ComboBox<String> scoreFilter = new ComboBox<>(FXCollections.observableArrayList(
-                "All scores", "5 stars", "4 stars", "3 stars", "2 stars", "1 star"));
-        scoreFilter.getSelectionModel().selectFirst();
-        filters.getChildren().addAll(userFilter, scoreFilter);
-        root.getChildren().add(filters);
+        userFilter.setId("admin-ratings-user");
+        userFilter.setPromptText("Buyer or seller username");
+        userFilter.setPrefColumnCount(18);
+        ComboBox<String> scoreFilter = new ComboBox<>();
+        scoreFilter.setId("admin-ratings-score");
+        scoreFilter.getItems().add("All scores");
+        for (int half = 0; half <= 10; half++) scoreFilter.getItems().add(Double.toString(half / 2.0));
+        scoreFilter.setEditable(true);
+        scoreFilter.setValue("All scores");
+        scoreFilter.getEditor().setStyle("-fx-padding: 0; -fx-border-width: 0; -fx-background-color: transparent; -fx-effect: null;");
+        scoreFilter.setPrefWidth(145);
+        scoreFilter.setAccessibleText("Exact rating score from zero to five, or All scores");
+        DatePicker from = new DatePicker(); from.setId("admin-ratings-from"); from.setEditable(false);
+        DatePicker to = new DatePicker(); to.setId("admin-ratings-to"); to.setEditable(false);
+        from.setPromptText("From date"); to.setPromptText("To date");
+        from.setPrefWidth(150); to.setPrefWidth(150);
+        Label count = new Label(); count.setId("admin-ratings-count");
+        Label feedback = new Label(); feedback.setId("admin-ratings-feedback");
+        feedback.setWrapText(true);
+        feedback.visibleProperty().bind(feedback.textProperty().isNotEmpty());
+        feedback.managedProperty().bind(feedback.visibleProperty());
+        VBox list = new VBox(10); list.setId("admin-ratings-list");
+        Runnable render = () -> renderRatings(list, count, feedback, userFilter.getText(),
+                scoreFilter.getEditor().getText(), from.getValue(), to.getValue());
+        userFilter.textProperty().addListener((obs, old, value) -> render.run());
+        scoreFilter.getEditor().textProperty().addListener((obs, old, value) -> render.run());
+        from.valueProperty().addListener((obs, old, value) -> render.run());
+        to.valueProperty().addListener((obs, old, value) -> render.run());
+        Button clear = new Button("Clear filters"); clear.setId("admin-ratings-clear");
+        clear.getStyleClass().add("btn-outline");
+        clear.setOnAction(event -> {
+            userFilter.clear(); scoreFilter.setValue("All scores"); scoreFilter.getEditor().setText("All scores");
+            from.setValue(null); to.setValue(null); render.run();
+        });
+        Button refresh = new Button("Refresh"); refresh.setId("admin-ratings-refresh");
+        refresh.getStyleClass().add("btn-outline"); refresh.setOnAction(event -> render.run());
+        FlowPane filters = new FlowPane(12, 8,
+                new VBox(4, new Label("User"), userFilter), new VBox(4, new Label("Score (0–5)"), scoreFilter),
+                new VBox(4, new Label("From (inclusive)"), from), new VBox(4, new Label("To (inclusive)"), to));
+        filters.setAlignment(Pos.CENTER_LEFT);
+        root.getChildren().addAll(filters, new HBox(10, clear, refresh), feedback, count, list);
+        ScrollPane scroll = new ScrollPane(root); scroll.setFitToWidth(true);
+        contentPane.getChildren().add(scroll);
+        render.run();
+    }
 
+    private void renderRatings(VBox list, Label count, Label feedback, String user, String scoreText,
+                               java.time.LocalDate from, java.time.LocalDate to) {
+        list.getChildren().clear(); count.setText(""); feedback.setText("");
         List<Review> reviews;
         try {
-            reviews = DataService.getAllReviews();
-        } catch (IllegalStateException | SecurityException ex) {
-            root.getChildren().add(new Label("Could not load reviews: " + ex.getMessage()));
-            contentPane.getChildren().add(new ScrollPane(root));
+            Double score = null;
+            if (scoreText != null && !scoreText.isBlank() && !"All scores".equals(scoreText.trim())) {
+                try { score = Double.valueOf(scoreText.trim()); }
+                catch (NumberFormatException ex) { throw new IllegalArgumentException("Enter a rating between 0.0 and 5.0, or select All scores."); }
+            }
+            reviews = DataService.getAllReviews(user, score, from, to);
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+            feedback.setText("Could not load ratings: " + ex.getMessage());
+            feedback.setStyle("-fx-text-fill: #c0392b;");
             return;
         }
-        if (reviews.isEmpty()) root.getChildren().add(new Label("No reviews stored."));
+        count.setText(reviews.size() + (reviews.size() == 1 ? " rating" : " ratings"));
+        if (reviews.isEmpty()) list.getChildren().add(new Label("No ratings match these filters."));
         for (Review r : reviews) {
             HBox row = new HBox(12);
             row.getStyleClass().add("card");
@@ -1016,31 +1063,57 @@ public class AdminDashboardController {
             row.setPadding(new Insets(12));
 
             VBox info = new VBox(4);
+            info.setMinWidth(0);
             HBox.setHgrow(info, Priority.ALWAYS);
-            Label stars = new Label("★".repeat(r.getRating()) + "☆".repeat(5 - r.getRating()) +
-                    "  @" + r.getSellerUsername() + " by @" + r.getBuyerUsername());
+            Label stars = new Label(r.getScore() + " / 5  ·  @" + r.getSellerUsername() + " by @" + r.getBuyerUsername());
+            stars.setWrapText(true);
             stars.setStyle("-fx-font-weight: bold;");
             Label comment = new Label(r.getComment());
             comment.setWrapText(true);
             comment.setStyle("-fx-text-fill: #5a5a7a;");
-            info.getChildren().addAll(stars, comment);
+            Label details = new Label(r.getListingTitle() + "  ·  "
+                    + (r.getCreatedAt() == null ? "Date unavailable" : r.getCreatedAt().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")))
+                    + "  ·  " + (r.isHidden() ? "Hidden" : "Visible"));
+            details.setWrapText(true);
+            info.getChildren().addAll(stars, details, comment);
+            if (r.getSellerReply() != null && !r.getSellerReply().isBlank()) {
+                Label reply = new Label("Seller reply: " + r.getSellerReply());
+                reply.setWrapText(true); info.getChildren().add(reply);
+            }
 
-            Button hide = new Button(r.isHidden() ? "Unhide" : "Hide");
+            Button hide = new Button(r.isHidden() ? "Restore" : "Hide");
+            hide.setMinWidth(Region.USE_PREF_SIZE);
+            hide.setId("admin-rating-hide-" + r.getId() + "-" + r.getBuyerUsername());
             hide.getStyleClass().addAll("btn-outline", "btn-sm");
             hide.setOnAction(e -> {
-                try {
-                    DataService.setReviewHidden(r.getBuyerUsername(), r.getId(), !r.isHidden());
-                    showRatings();
-                } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
-                    new Alert(Alert.AlertType.ERROR, ex.getMessage()).showAndWait();
-                }
+                boolean hidden = !r.isHidden();
+                Alert confirm = new Alert(Alert.AlertType.CONFIRMATION,
+                        (hidden ? "Hide" : "Restore") + " the rating for '" + r.getListingTitle()
+                                + "' by @" + r.getBuyerUsername() + " for @" + r.getSellerUsername() + "?\n\n"
+                                + (hidden ? "It will be excluded from public reviews and the seller's rating totals. Admins can restore it later."
+                                : "It will appear in public reviews and count toward the seller's rating totals again."),
+                        ButtonType.OK, ButtonType.CANCEL);
+                confirm.initOwner(contentPane.getScene().getWindow());
+                confirm.setTitle("Confirm Rating Visibility");
+                confirm.setHeaderText(hidden ? "Hide rating" : "Restore rating");
+                confirm.setOnHidden(event -> {
+                    if (confirm.getResult() != ButtonType.OK) return;
+                    try {
+                        DataService.setReviewHidden(r.getBuyerUsername(), r.getId(), hidden);
+                        renderRatings(list, count, feedback, user, scoreText, from, to);
+                        feedback.setText(hidden ? "Rating hidden successfully." : "Rating restored successfully.");
+                        feedback.setStyle("-fx-text-fill: #16804a;");
+                    } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+                        renderRatings(list, count, feedback, user, scoreText, from, to);
+                        feedback.setText("Could not update rating: " + ex.getMessage());
+                        feedback.setStyle("-fx-text-fill: #c0392b;");
+                    }
+                });
+                confirm.show();
             });
             row.getChildren().addAll(info, hide);
-            root.getChildren().add(row);
+            list.getChildren().add(row);
         }
-        ScrollPane scroll = new ScrollPane(root);
-        scroll.setFitToWidth(true);
-        contentPane.getChildren().add(scroll);
     }
 
     @FXML

@@ -1118,13 +1118,31 @@ public class DataService {
     }
 
     public static List<Review> getAllReviews() {
+        return getAllReviews(null, null, null, null);
+    }
+
+    /** Admin overview; username matches buyer or seller, with inclusive calendar dates. Null filters mean all. */
+    public static List<Review> getAllReviews(String user, Double score, LocalDate from, LocalDate to) {
         requireAdmin();
-        return mapReviews(DatabaseManager.fetchAllReviews());
+        if (score != null && (!Double.isFinite(score) || score < 0 || score > 5)) {
+            throw new IllegalArgumentException("Rating must be between 0.0 and 5.0.");
+        }
+        if (from != null && to != null && from.isAfter(to)) {
+            throw new IllegalArgumentException("From date must be on or before To date.");
+        }
+        String query = user == null ? "" : user.trim().toLowerCase(java.util.Locale.ROOT);
+        return mapReviews(DatabaseManager.fetchAllReviews()).stream()
+                .filter(r -> query.isEmpty() || r.getBuyerUsername().toLowerCase(java.util.Locale.ROOT).contains(query)
+                        || r.getSellerUsername().toLowerCase(java.util.Locale.ROOT).contains(query))
+                .filter(r -> score == null || Double.compare(r.getScore(), score) == 0)
+                .filter(r -> from == null || r.getCreatedAt() != null && !r.getCreatedAt().toLocalDate().isBefore(from))
+                .filter(r -> to == null || r.getCreatedAt() != null && !r.getCreatedAt().toLocalDate().isAfter(to))
+                .toList();
     }
 
     public static void setReviewHidden(String buyerUsername, String listingId, boolean hidden) {
-        requireAdmin();
-        DatabaseManager.setReviewHidden(buyerUsername, parseListingId(listingId), hidden);
+        String admin = requireAdmin();
+        DatabaseManager.setReviewHidden(admin, buyerUsername, parseListingId(listingId), hidden);
     }
 
     public static List<Listing> getAllListings() {
@@ -1209,9 +1227,9 @@ public class DataService {
             review.setComment(row.get("text") == null ? "" : (String) row.get("text"));
             review.setSellerReply((String) row.get("seller_reply"));
             double score = row.get("rating") instanceof Number number ? number.doubleValue() : 0;
-            review.setRating((int) Math.max(0, Math.min(5, Math.round(score))));
+            review.setScore(score);
             review.setHidden(row.get("hidden") instanceof Number number && number.intValue() != 0);
-            if (row.get("created_at") != null) review.setCreatedAt(parseDate(row.get("created_at").toString()));
+            review.setCreatedAt(parseDate((String) row.get("created_at")));
             reviews.add(review);
         }
         return reviews;
