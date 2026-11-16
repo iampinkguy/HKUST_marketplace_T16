@@ -1138,6 +1138,43 @@ public class DataService {
         return listings;
     }
 
+    /** Publishes immediately on behalf of an active seller, using the seller form validation. */
+    public static void addListingForSeller(String sellerUsername, Listing listing, List<Path> photos) {
+        String admin = requireAdmin();
+        if (listing == null || photos == null || photos.size() > 6) {
+            throw new IllegalArgumentException("Listing details and up to 6 photos are required.");
+        }
+        validateListingDetails(listing);
+        DatabaseManager.addAdminListing(admin, sellerUsername, listing, List.copyOf(photos));
+    }
+
+    /** Edits content without republishing or resetting the listing's lifecycle. */
+    public static void updateListingAsAdmin(Listing listing, List<Path> photos, boolean replacePhotos) {
+        String admin = requireAdmin();
+        if (listing == null || listing.getId() == null || photos == null || photos.size() > 6) {
+            throw new IllegalArgumentException("Listing details, ID and up to 6 photos are required.");
+        }
+        validateListingDetails(listing);
+        DatabaseManager.updateAdminListing(admin, listing, List.copyOf(photos), replacePhotos);
+    }
+
+    public record ListingManagementEntry(String adminUsername, String reason, LocalDateTime occurredAt) {}
+
+    public static List<ListingManagementEntry> getListingManagementHistory(String listingId) {
+        requireAdmin();
+        return DatabaseManager.fetchRows("listing_takedowns", Map.of("listing_id", parseListingId(listingId)))
+                .stream().sorted(Comparator.comparingInt((Map<String, Object> row) -> ((Number) row.get("takedown_id")).intValue()).reversed())
+                .map(row -> new ListingManagementEntry(
+                        row.get("admin_username").toString(), row.get("reason").toString(),
+                        LocalDateTime.parse(row.get("occurred_at").toString()))).toList();
+    }
+
+    public static void takeDownListing(String listingId, String reason, long expectedVersion) {
+        String admin = requireAdmin();
+        if (reason == null || reason.isBlank()) throw new IllegalArgumentException("A takedown reason is required.");
+        DatabaseManager.takeDownListing(parseListingId(listingId), admin, reason.trim(), expectedVersion);
+    }
+
     public static void removeListing(String listingId) {
         requireAdmin();
         DatabaseManager.removeListing(parseListingId(listingId));
