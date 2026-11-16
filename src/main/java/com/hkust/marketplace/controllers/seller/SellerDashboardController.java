@@ -18,6 +18,7 @@ import javafx.scene.chart.XYChart;
 import javafx.scene.control.*;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.*;
 import javafx.stage.FileChooser;
 
@@ -37,6 +38,7 @@ public class SellerDashboardController {
     @FXML private Button btnListings, btnCreate, btnStats, btnReviews, btnNotifications, btnProfile;
 
     private Button currentActiveBtn;
+    private String notificationCategory = "All";
 
     @FXML
     public void initialize() {
@@ -367,7 +369,11 @@ public class SellerDashboardController {
     }
 
     private void showListingDetails(Listing listing) {
-        setActive(btnListings, "Listing Detail");
+        showListingDetails(listing, false);
+    }
+
+    private void showListingDetails(Listing listing, boolean fromNotification) {
+        setActive(fromNotification ? btnNotifications : btnListings, "Listing Detail");
         contentPane.getChildren().clear();
 
         VBox root = new VBox(14);
@@ -379,7 +385,10 @@ public class SellerDashboardController {
         HBox.setHgrow(spacer, Priority.ALWAYS);
         Button close = new Button("X");
         close.getStyleClass().addAll("btn-outline", "btn-sm");
-        close.setOnAction(e -> showMyListings());
+        close.setOnAction(e -> {
+            if (fromNotification) showNotifications();
+            else showMyListings();
+        });
         header.getChildren().addAll(
                 styled(listing.getTitle(), "-fx-font-size: 22px; -fx-font-weight: bold;"),
                 spacer,
@@ -837,48 +846,124 @@ public class SellerDashboardController {
             return;
         }
 
-        List<Notification> notifs = DatabaseManager.fetchNotifications(user.getUsername());
-        if (notifs.isEmpty()) {
-            root.getChildren().add(new Label("No notifications found."));
-        } else {
-            for (Notification n : notifs) {
+        ComboBox<String> categories = new ComboBox<>(FXCollections.observableArrayList(
+                "All", "Offer", "Chat", "Reminder", "Rating", "System", "Announcement"));
+        if (!categories.getItems().contains(notificationCategory)) notificationCategory = "All";
+        categories.setValue(notificationCategory);
+        VBox list = new VBox(8);
+        Runnable render = () -> {
+            list.getChildren().clear();
+            List<Notification> notifications = DatabaseManager.fetchNotifications(user.getUsername());
+            String selected = categories.getValue() == null ? "All" : categories.getValue();
+            List<Notification> shown = notifications.stream()
+                    .filter(notification -> "All".equals(selected)
+                            || selected.equalsIgnoreCase(notification.getCategory()))
+                    .toList();
+            List<Listing> listings;
+            try {
+                listings = DataService.getSellerListings();
+            } catch (IllegalStateException | SecurityException ex) {
+                listings = List.of();
+            }
+            if (shown.isEmpty()) {
+                list.getChildren().add(styled("No notifications in this category.",
+                        "-fx-text-fill: #9aa0b0; -fx-font-size: 13px;"));
+            }
+            for (Notification notification : shown) {
                 VBox item = new VBox(4);
                 item.getStyleClass().add("notif-item");
-                Label t = new Label(n.getTitle());
-                t.setStyle("-fx-font-weight: bold;");
-                Label status = new Label(n.isRead() ? "Read" : "Unread");
-                status.setStyle(n.isRead()
-                        ? "-fx-text-fill: #9aa0b0; -fx-font-size: 11px;"
-                        : "-fx-text-fill: #A68137; -fx-font-size: 11px; -fx-font-weight: bold;");
-                Label meta = new Label(n.getCategory() + " · " +
-                        n.getTimestamp().format(DateTimeFormatter.ofPattern("dd MMM HH:mm")));
-                meta.setStyle("-fx-text-fill: #9aa0b0; -fx-font-size: 11px;");
-                Button view = new Button("View details");
-                view.getStyleClass().addAll("btn-outline", "btn-sm");
-                view.setOnAction(e -> viewNotification(user, n));
-                item.getChildren().addAll(t, status, meta, view);
-                root.getChildren().add(item);
+                if (!notification.isRead()) item.setStyle("-fx-border-color: #003974; -fx-border-width: 0 0 0 3;");
+                String listingId = listingIdForNotification(notification, listings);
+                HBox footer = new HBox(8);
+                footer.setAlignment(Pos.CENTER_LEFT);
+                Region spacer = new Region();
+                HBox.setHgrow(spacer, Priority.ALWAYS);
+                String when = notification.getTimestamp() == null ? ""
+                        : notification.getTimestamp().format(DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm:ss"));
+                footer.getChildren().add(styled(notification.getCategory() + " · " + when,
+                        "-fx-text-fill: #9aa0b0; -fx-font-size: 11px;"));
+                footer.getChildren().add(spacer);
+                if (listingId != null) {
+                    Button go = new Button("Go ->");
+                    go.getStyleClass().addAll("btn-outline", "btn-sm");
+                    go.addEventFilter(MouseEvent.MOUSE_CLICKED, MouseEvent::consume);
+                    String targetId = listingId;
+                    go.setOnAction(event -> openNotificationListing(user, notification, targetId));
+                    footer.getChildren().add(go);
+                }
+                item.getChildren().addAll(
+                        styled(notification.getTitle(), "-fx-font-weight: bold; -fx-text-fill: #1a1a2e;"),
+                        styled(notification.getMessage(), "-fx-text-fill: #5a5a7a; -fx-font-size: 13px;"),
+                        footer
+                );
+                item.setOnMouseClicked(event -> {
+                    if (!markNotificationRead(user, notification)) return;
+                    showNotifications();
+                });
+                list.getChildren().add(item);
             }
-        }
-        contentPane.getChildren().add(new ScrollPane(root));
+        };
+        categories.setOnAction(event -> {
+            notificationCategory = categories.getValue();
+            render.run();
+        });
+        root.getChildren().addAll(new HBox(8, new Label("Category"), categories), list);
+        render.run();
+        ScrollPane scroll = new ScrollPane(root);
+        scroll.setFitToWidth(true);
+        scroll.setStyle("-fx-background-color: transparent; -fx-background: transparent;");
+        contentPane.getChildren().add(scroll);
     }
 
-    private void viewNotification(User user, Notification notification) {
-        Alert details = new Alert(Alert.AlertType.INFORMATION, notification.getMessage(), ButtonType.CLOSE);
-        details.setTitle("Notification Details");
-        details.setHeaderText(notification.getTitle() + " · " + notification.getCategory()
-                + " · " + notification.getTimestamp().format(DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm")));
-        details.showAndWait();
-
-        if (notification.isRead()) return;
+    private void openNotificationListing(User user, Notification notification, String listingId) {
+        if (!markNotificationRead(user, notification)) return;
+        Listing listing;
         try {
-            DatabaseManager.markNotificationRead(user.getUsername(), notification.getId());
-        } catch (IllegalStateException e) {
-            showProfileError("Could not mark notification as read: " + e.getMessage());
+            listing = DataService.getSellerListings().stream()
+                    .filter(item -> listingId.equals(item.getId()))
+                    .findFirst()
+                    .orElse(null);
+        } catch (IllegalStateException | SecurityException ex) {
+            showProfileError(ex.getMessage());
             return;
         }
-        notification.setRead(true);
-        showNotifications();
+        if (listing == null) {
+            showProfileError("This listing is no longer available.");
+            showNotifications();
+            return;
+        }
+        showListingDetails(listing, true);
+    }
+
+    private String listingIdForNotification(Notification notification, List<Listing> listings) {
+        if (notification.getListingId() != null) {
+            String id = Integer.toString(notification.getListingId());
+            for (Listing listing : listings) {
+                if (id.equals(listing.getId())) return id;
+            }
+        }
+        String message = notification.getMessage() == null ? "" : notification.getMessage();
+        Listing best = null;
+        int bestLength = 0;
+        for (Listing listing : listings) {
+            String name = listing.getTitle();
+            if (name == null || name.isBlank() || !message.contains(name) || name.length() <= bestLength) continue;
+            best = listing;
+            bestLength = name.length();
+        }
+        return best == null ? null : best.getId();
+    }
+
+    private boolean markNotificationRead(User user, Notification notification) {
+        if (notification.isRead()) return true;
+        try {
+            DatabaseManager.markNotificationRead(user.getUsername(), notification.getId());
+            notification.setRead(true);
+            return true;
+        } catch (IllegalStateException e) {
+            showProfileError("Could not mark notification as read: " + e.getMessage());
+            return false;
+        }
     }
 
     @FXML

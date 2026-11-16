@@ -432,8 +432,10 @@ public class DataService {
                 listingId, buyer, new Message(buyer, "buyer", content.trim()));
         DatabaseManager.markChatHistorySeen(listingId, buyer, "buyer");
         User user = SessionManager.getCurrentUser();
+        int listingNumber = parseListingId(listingId);
         DatabaseManager.createNotification(seller, buyer, "New chat message",
-                user.getFullName() + " sent you a message about " + listing.get("item_name"), "Chat");
+                user.getFullName() + " sent you a message about " + listing.get("item_name"), "Chat",
+                DatabaseManager.latestBuyerRequestId(buyer, listingNumber), listingNumber);
     }
 
     private static void requireSellerChatParticipant(String listingId, String buyerUsername) {

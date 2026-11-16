@@ -1106,14 +1106,15 @@ public class DatabaseManager {
                 }
 
                 try (PreparedStatement statement = connection.prepareStatement("""
-                        INSERT INTO notifications (username, title, message, category, timestamp)
-                        VALUES (?, ?, ?, 'System', ?)
+                        INSERT INTO notifications (username, title, message, category, timestamp, listing_id)
+                        VALUES (?, ?, ?, 'System', ?, ?)
                         """)) {
                     statement.setString(1, seller);
                     statement.setString(2, approved ? "Listing Approved" : "Listing Rejected");
                     statement.setString(3, "Your listing '" + title + "' " + (approved
                             ? "is now live!" : "was rejected. Reason: " + reason));
                     statement.setString(4, reviewedAt);
+                    statement.setInt(5, listingId);
                     statement.executeUpdate();
                 }
                 connection.commit();
@@ -1227,7 +1228,7 @@ public class DatabaseManager {
                         "SELECT item_name FROM listings WHERE listing_id = ?", listingId);
                 insertNotification(connection, seller, buyerUsername, "New " + normalizedType.toLowerCase() + " request",
                         buyerUsername + " submitted a " + normalizedType.toLowerCase()
-                                + " request for " + itemName + ".", "Offer");
+                                + " request for " + itemName + ".", "Offer", requestId, listingId);
                 connection.commit();
                 return requestId;
             } catch (RuntimeException | SQLException e) {
@@ -2076,7 +2077,7 @@ public class DatabaseManager {
                     others.executeUpdate();
                 }
                 insertNotification(connection, seller, buyerUsername, "Giveaway claimed",
-                        buyerUsername + " claimed " + itemName + ".", "Offer");
+                        buyerUsername + " claimed " + itemName + ".", "Offer", requestId, listingId);
                 connection.commit();
                 return requestId;
             } catch (RuntimeException | SQLException e) {
@@ -2159,7 +2160,7 @@ public class DatabaseManager {
                 insertNotification(connection, seller, buyerUsername, "New borrow request",
                         buyerUsername + " requested to borrow " + itemName + " from "
                                 + startDate + " to " + endDate + " (" + requestedDays
-                                + (requestedDays == 1 ? " day)." : " days)."), "Offer");
+                                + (requestedDays == 1 ? " day)." : " days)."), "Offer", requestId, listingId);
                 connection.commit();
                 return requestId;
             } catch (RuntimeException | SQLException e) {
@@ -2305,16 +2306,16 @@ public class DatabaseManager {
                 }
                 String itemName = request.get("item_name") == null ? "your borrowed item" : (String) request.get("item_name");
                 String seller = (String) request.get("seller");
+                Integer listingId = request.get("listing_id") instanceof Number id ? id.intValue() : null;
                 if (seller != null) {
                     insertNotification(connection, seller, buyerUsername,
                             automatic ? "Borrowed item auto-returned" : "Borrowed item returned",
                             itemName + (automatic
                                     ? " was automatically returned because the borrowing period ended."
                                     : " was returned by the borrower."),
-                            "System");
+                            "System", requestId, listingId);
                 }
                 if (automatic) {
-                    Integer listingId = request.get("listing_id") instanceof Number id ? id.intValue() : null;
                     insertNotification(connection, buyerUsername, seller, "Borrow period ended",
                             itemName + " was automatically returned because the due time passed.", "Reminder",
                             requestId, listingId);
@@ -2380,9 +2381,11 @@ public class DatabaseManager {
                 }
                 String seller = (String) request.get("seller");
                 String itemName = request.get("item_name") == null ? "the item" : (String) request.get("item_name");
+                Integer listingId = request.get("listing_id") instanceof Number id ? id.intValue() : null;
                 if (seller != null) {
                     insertNotification(connection, seller, buyerUsername, "Deal completed",
-                            buyerUsername + " marked the deal for " + itemName + " as complete.", "System");
+                            buyerUsername + " marked the deal for " + itemName + " as complete.", "System",
+                            requestId, listingId);
                 }
                 connection.commit();
             } catch (RuntimeException | SQLException e) {
@@ -2470,7 +2473,8 @@ public class DatabaseManager {
                     ratingUpdate.executeUpdate();
                 }
                 insertNotification(connection, seller, buyerUsername, "New seller rating",
-                        buyerUsername + " rated the deal for " + itemName + " " + rating + " / 5.", "Rating");
+                        buyerUsername + " rated the deal for " + itemName + " " + rating + " / 5.", "Rating",
+                        requestId, listingId);
                 connection.commit();
             } catch (RuntimeException | SQLException e) {
                 connection.rollback();
