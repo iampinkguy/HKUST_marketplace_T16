@@ -497,8 +497,10 @@ public class DataService {
                 listingId, buyer, new Message(buyer, "buyer", content.trim()));
         DatabaseManager.markChatHistorySeen(listingId, buyer, "buyer");
         User user = SessionManager.getCurrentUser();
+        int listingNumber = parseListingId(listingId);
         DatabaseManager.createNotification(seller, buyer, "New chat message",
-                user.getFullName() + " sent you a message about " + listing.get("item_name"), "Chat");
+                user.getFullName() + " sent you a message about " + listing.get("item_name"), "Chat",
+                DatabaseManager.latestBuyerRequestId(buyer, listingNumber), listingNumber);
     }
 
     private static void requireSellerChatParticipant(String listingId, String buyerUsername) {
@@ -916,6 +918,29 @@ public class DataService {
         DatabaseManager.reportListing(buyer, parseListingId(listingId));
     }
 
+    public static List<Integer> getBuyerFavouriteIds() {
+        return DatabaseManager.fetchFavouriteListingIds(requireBuyer());
+    }
+
+    public static void setBuyerFavourite(String listingId, boolean favourite) {
+        String buyer = requireBuyer();
+        int id = parseListingId(listingId);
+        if (DatabaseManager.fetchRow("listings", "listing_id", id) == null) {
+            throw new IllegalArgumentException("Listing was not found.");
+        }
+        DatabaseManager.setFavourite(buyer, id, favourite);
+    }
+
+    public static List<Listing> getBuyerFavouriteListings() {
+        String buyer = requireBuyer();
+        List<Integer> hidden = DatabaseManager.fetchReportedListingIds(buyer);
+        List<Listing> favourites = new ArrayList<>();
+        for (Listing listing : DatabaseManager.fetchFavouriteListings(buyer)) {
+            if (!hidden.contains(Integer.parseInt(listing.getId()))) favourites.add(listing);
+        }
+        return favourites;
+    }
+
     public static int submitBorrowRequest(String listingId, LocalDateTime start, LocalDateTime end) {
         String buyer = requireBuyer();
         int id = parseListingId(listingId);
@@ -1047,6 +1072,12 @@ public class DataService {
         DatabaseManager.settleExpiredBorrows(buyer);
         DatabaseManager.notifyBuyerIfListingRemoved(buyer);
         return getNotificationsFor(buyer);
+    }
+
+    public static boolean hasUnreadNotifications() {
+        User user = SessionManager.getCurrentUser();
+        if (user == null || !user.isActive()) return false;
+        return DatabaseManager.hasUnreadNotifications(user.getUsername());
     }
 
     public static void markBuyerNotificationRead(String notificationId) {

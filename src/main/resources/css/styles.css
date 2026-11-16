@@ -139,6 +139,18 @@
     -fx-border-width: 0 0 0 4;
 }
 
+.notif-unread-dot {
+    -fx-background-color: #e53935;
+    -fx-background-radius: 6;
+    -fx-min-width: 10;
+    -fx-pref-width: 10;
+    -fx-max-width: 10;
+    -fx-min-height: 10;
+    -fx-pref-height: 10;
+    -fx-max-height: 10;
+    -fx-translate-x: -18;
+}
+
 /* ---------- Top bar ---------- */
 .top-bar {
     -fx-background-color: white;

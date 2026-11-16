@@ -7,6 +7,7 @@ import com.hkust.marketplace.utils.DatabaseManager;
 import com.hkust.marketplace.utils.SceneManager;
 import com.hkust.marketplace.utils.SessionManager;
 import javafx.fxml.FXML;
+import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.TextField;
@@ -15,7 +16,31 @@ public class BuyerLoginController {
 
     @FXML private TextField usernameField;
     @FXML private PasswordField passwordField;
+    @FXML private TextField passwordVisibleField;
+    @FXML private Button togglePasswordButton;
     @FXML private Label errorLabel;
+
+    @FXML
+    private void initialize() {
+        passwordVisibleField.textProperty().bindBidirectional(passwordField.textProperty());
+    }
+
+    @FXML
+    private void togglePassword() {
+        boolean show = !passwordVisibleField.isVisible();
+        passwordVisibleField.setVisible(show);
+        passwordVisibleField.setManaged(show);
+        passwordField.setVisible(!show);
+        passwordField.setManaged(!show);
+        togglePasswordButton.setText(show ? "Hide" : "Show");
+        if (show) {
+            passwordVisibleField.requestFocus();
+            passwordVisibleField.positionCaret(passwordVisibleField.getText().length());
+        } else {
+            passwordField.requestFocus();
+            passwordField.positionCaret(passwordField.getText().length());
+        }
+    }
 
     @FXML
     private void handleLogin() {

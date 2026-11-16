@@ -5,6 +5,7 @@
 <?import javafx.scene.image.Image?>
 <?import javafx.scene.image.ImageView?>
 <?import javafx.scene.layout.*?>
+<?import javafx.scene.shape.Circle?>
 
 <BorderPane xmlns:fx="http://javafx.com/fxml"
             fx:controller="com.hkust.marketplace.controllers.seller.SellerDashboardController"
@@ -31,8 +32,13 @@
                     onAction="#showStats" maxWidth="Infinity" alignment="CENTER_LEFT"/>
             <Button fx:id="btnReviews" text="  Reviews &amp; Feedback" styleClass="sidebar-btn"
                     onAction="#showReviews" maxWidth="Infinity" alignment="CENTER_LEFT"/>
-            <Button fx:id="btnNotifications" text="  Notifications" styleClass="sidebar-btn"
-                    onAction="#showNotifications" maxWidth="Infinity" alignment="CENTER_LEFT"/>
+            <StackPane maxWidth="Infinity">
+                <Button fx:id="btnNotifications" text="  Notifications" styleClass="sidebar-btn"
+                        onAction="#showNotifications" maxWidth="Infinity" alignment="CENTER_LEFT"/>
+                <Circle fx:id="notifUnreadDot" radius="6" fill="#e53935" stroke="white" strokeWidth="1.5"
+                        mouseTransparent="true" visible="false"
+                        StackPane.alignment="TOP_RIGHT" translateX="-14.0" translateY="10.0"/>
+            </StackPane>
             <Button fx:id="btnProfile" text="  My Profile" styleClass="sidebar-btn"
                     onAction="#showProfile" maxWidth="Infinity" alignment="CENTER_LEFT"/>
 

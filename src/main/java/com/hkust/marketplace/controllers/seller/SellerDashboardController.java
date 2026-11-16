@@ -5,11 +5,14 @@ import com.hkust.marketplace.utils.DataService;
 import com.hkust.marketplace.utils.DatabaseManager;
 import com.hkust.marketplace.utils.SceneManager;
 import com.hkust.marketplace.utils.SessionManager;
+import javafx.animation.KeyFrame;
+import javafx.animation.Timeline;
 import javafx.collections.FXCollections;
 import javafx.concurrent.Task;
 import javafx.fxml.FXML;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.util.Duration;
 import javafx.scene.chart.BarChart;
 import javafx.scene.chart.CategoryAxis;
 import javafx.scene.chart.NumberAxis;
@@ -18,13 +21,18 @@ import javafx.scene.chart.XYChart;
 import javafx.scene.control.*;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.*;
+import javafx.scene.paint.Color;
+import javafx.scene.shape.Circle;
 import javafx.stage.FileChooser;
 
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.EnumMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -35,15 +43,53 @@ public class SellerDashboardController {
     @FXML private Label pageTitle;
     @FXML private Label welcomeLabel;
     @FXML private Button btnListings, btnCreate, btnStats, btnReviews, btnNotifications, btnProfile;
+    @FXML private Circle notifUnreadDot;
 
     private Button currentActiveBtn;
+    private String notificationCategory = "All";
+    private Timeline notificationTicker;
 
     @FXML
     public void initialize() {
         User user = SessionManager.getCurrentUser();
         if (user != null) welcomeLabel.setText("Hello, " + user.getFullName());
         currentActiveBtn = btnListings;
+        ensureNotificationDot();
+        notificationTicker = new Timeline(new KeyFrame(Duration.seconds(2), event -> refreshNotificationDot()));
+        notificationTicker.setCycleCount(Timeline.INDEFINITE);
+        notificationTicker.play();
+        refreshNotificationDot();
         showMyListings();
+    }
+
+    private void ensureNotificationDot() {
+        if (notifUnreadDot != null) {
+            notifUnreadDot.toFront();
+            return;
+        }
+        if (btnNotifications == null || !(btnNotifications.getParent() instanceof StackPane host)) return;
+        notifUnreadDot = new Circle(6, Color.web("#e53935"));
+        notifUnreadDot.setStroke(Color.WHITE);
+        notifUnreadDot.setStrokeWidth(1.5);
+        notifUnreadDot.setMouseTransparent(true);
+        notifUnreadDot.setVisible(false);
+        StackPane.setAlignment(notifUnreadDot, Pos.TOP_RIGHT);
+        notifUnreadDot.setTranslateX(-14);
+        notifUnreadDot.setTranslateY(10);
+        host.getChildren().add(notifUnreadDot);
+    }
+
+    private void refreshNotificationDot() {
+        ensureNotificationDot();
+        if (notifUnreadDot == null) return;
+        boolean unread = false;
+        try {
+            unread = DataService.hasUnreadNotifications();
+        } catch (IllegalStateException | SecurityException ignored) {
+            unread = false;
+        }
+        notifUnreadDot.setVisible(unread);
+        if (unread) notifUnreadDot.toFront();
     }
 
     private void setActive(Button btn, String title) {
@@ -367,7 +413,11 @@ public class SellerDashboardController {
     }
 
     private void showListingDetails(Listing listing) {
-        setActive(btnListings, "Listing Detail");
+        showListingDetails(listing, false);
+    }
+
+    private void showListingDetails(Listing listing, boolean fromNotification) {
+        setActive(fromNotification ? btnNotifications : btnListings, "Listing Detail");
         contentPane.getChildren().clear();
 
         VBox root = new VBox(14);
@@ -379,7 +429,10 @@ public class SellerDashboardController {
         HBox.setHgrow(spacer, Priority.ALWAYS);
         Button close = new Button("X");
         close.getStyleClass().addAll("btn-outline", "btn-sm");
-        close.setOnAction(e -> showMyListings());
+        close.setOnAction(e -> {
+            if (fromNotification) showNotifications();
+            else showMyListings();
+        });
         header.getChildren().addAll(
                 styled(listing.getTitle(), "-fx-font-size: 22px; -fx-font-weight: bold;"),
                 spacer,
@@ -399,6 +452,12 @@ public class SellerDashboardController {
                 fact("Availability", listing.getAvailabilityStatus() + " · " + listing.getStatus()),
                 fact("Views", Integer.toString(listing.getViewCount()))
         );
+        if (listing.getType() == ListingType.LEND) {
+            String period = listing.getLendingDays() == null || listing.getLendingDays() <= 0
+                    ? "Not set"
+                    : listing.getLendingDays() + (listing.getLendingDays() == 1 ? " day" : " days");
+            facts.getChildren().add(3, fact("Lending period", period));
+        }
         if (listing.getRejectionReason() != null && !listing.getRejectionReason().isBlank()) {
             facts.getChildren().add(fact("Admin feedback", listing.getRejectionReason()));
         }
@@ -721,40 +780,73 @@ public class SellerDashboardController {
             return;
         }
 
-        // Metric cards
+        int totalViews = myListings.stream().mapToInt(Listing::getViewCount).sum();
+
         HBox metrics = new HBox(16);
         metrics.getChildren().addAll(
                 metricCard("Listings", String.valueOf(myListings.size()), "#003974"),
                 metricCard("Avg Rating", String.format("%.1f", user != null ? user.getAverageRating() : 0), "#A68137"),
                 metricCard("Reviews", String.valueOf(user != null ? user.getRatingCount() : 0), "#2e7d32"),
-                metricCard("Views (demo)", "128", "#1565c0")
+                metricCard("Views", String.valueOf(totalViews), "#1565c0")
         );
         root.getChildren().add(metrics);
 
-        // Bar chart
-        CategoryAxis xAxis = new CategoryAxis();
-        NumberAxis yAxis = new NumberAxis();
-        BarChart<String, Number> barChart = new BarChart<>(xAxis, yAxis);
-        barChart.setTitle("Listings by Category (demo data)");
-        barChart.setLegendVisible(false);
-        barChart.setPrefHeight(280);
-        XYChart.Series<String, Number> series = new XYChart.Series<>();
-        series.getData().add(new XYChart.Data<>("Textbooks", 3));
-        series.getData().add(new XYChart.Data<>("Electronics", 5));
-        series.getData().add(new XYChart.Data<>("Furniture", 2));
-        series.getData().add(new XYChart.Data<>("Others", 1));
-        barChart.getData().add(series);
+        if (myListings.isEmpty()) {
+            root.getChildren().add(styled("No listings yet.", "-fx-text-fill: #9aa0b0; -fx-font-size: 13px;"));
+        } else {
+            CategoryAxis xAxis = new CategoryAxis();
+            NumberAxis yAxis = new NumberAxis();
+            yAxis.setLabel("Listings");
+            yAxis.setForceZeroInRange(true);
+            yAxis.setMinorTickVisible(false);
+            BarChart<String, Number> barChart = new BarChart<>(xAxis, yAxis);
+            barChart.setTitle("Listings by Category");
+            barChart.setLegendVisible(false);
+            barChart.setPrefHeight(280);
+            barChart.setAnimated(false);
+            XYChart.Series<String, Number> series = new XYChart.Series<>();
+            int maxCategory = 0;
+            Map<String, Integer> categoryCounts = new LinkedHashMap<>();
+            for (String category : DataService.CATEGORIES) categoryCounts.put(category, 0);
+            for (Listing listing : myListings) {
+                String category = listing.getCategory() == null || listing.getCategory().isBlank()
+                        ? "Uncategorised" : listing.getCategory();
+                categoryCounts.merge(category, 1, Integer::sum);
+            }
+            for (Map.Entry<String, Integer> entry : categoryCounts.entrySet()) {
+                if (entry.getValue() == 0) continue;
+                series.getData().add(new XYChart.Data<>(entry.getKey(), entry.getValue()));
+                maxCategory = Math.max(maxCategory, entry.getValue());
+            }
+            int tick = maxCategory <= 8 ? 1 : (int) Math.ceil(maxCategory / 8.0);
+            yAxis.setAutoRanging(false);
+            yAxis.setLowerBound(0);
+            yAxis.setTickUnit(tick);
+            yAxis.setUpperBound(Math.ceil(maxCategory / (double) tick) * tick);
+            barChart.getData().add(series);
 
-        // Pie chart
-        PieChart pie = new PieChart();
-        pie.setTitle("Listing Status Distribution");
-        pie.setPrefHeight(280);
-        pie.getData().add(new PieChart.Data("Live", 4));
-        pie.getData().add(new PieChart.Data("Pending", 1));
-        pie.getData().add(new PieChart.Data("Sold", 2));
+            PieChart pie = new PieChart();
+            pie.setTitle("Listing Status");
+            pie.setPrefHeight(280);
+            pie.setAnimated(false);
+            pie.setLabelsVisible(true);
+            Map<ListingStatus, Integer> statusCounts = new EnumMap<>(ListingStatus.class);
+            for (Listing listing : myListings) {
+                if (listing.getStatus() != null) statusCounts.merge(listing.getStatus(), 1, Integer::sum);
+            }
+            for (ListingStatus status : ListingStatus.values()) {
+                int count = statusCounts.getOrDefault(status, 0);
+                if (count > 0) pie.getData().add(new PieChart.Data(statusLabel(status), count));
+            }
 
-        HBox charts = new HBox(20, barChart, pie);
-        root.getChildren().add(charts);
+            HBox.setHgrow(barChart, Priority.ALWAYS);
+            HBox.setHgrow(pie, Priority.ALWAYS);
+            barChart.setMaxWidth(Double.MAX_VALUE);
+            pie.setMaxWidth(Double.MAX_VALUE);
+            HBox charts = new HBox(20, barChart, pie);
+            charts.setFillHeight(true);
+            root.getChildren().add(charts);
+        }
 
         ScrollPane scroll = new ScrollPane(root);
         scroll.setFitToWidth(true);
@@ -773,6 +865,16 @@ public class SellerDashboardController {
         lbl.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 12px;");
         card.getChildren().addAll(val, lbl);
         return card;
+    }
+
+    private String statusLabel(ListingStatus status) {
+        String[] words = status.name().toLowerCase(Locale.ROOT).split("_");
+        StringBuilder label = new StringBuilder();
+        for (String word : words) {
+            if (!label.isEmpty()) label.append(' ');
+            label.append(Character.toUpperCase(word.charAt(0))).append(word.substring(1));
+        }
+        return label.toString();
     }
 
     @FXML
@@ -831,48 +933,127 @@ public class SellerDashboardController {
             return;
         }
 
-        List<Notification> notifs = DatabaseManager.fetchNotifications(user.getUsername());
-        if (notifs.isEmpty()) {
-            root.getChildren().add(new Label("No notifications found."));
-        } else {
-            for (Notification n : notifs) {
+        ComboBox<String> categories = new ComboBox<>(FXCollections.observableArrayList(
+                "All", "Offer", "Chat", "Reminder", "Rating", "System", "Announcement"));
+        if (!categories.getItems().contains(notificationCategory)) notificationCategory = "All";
+        categories.setValue(notificationCategory);
+        VBox list = new VBox(8);
+        Runnable render = () -> {
+            list.getChildren().clear();
+            List<Notification> notifications = DatabaseManager.fetchNotifications(user.getUsername());
+            String selected = categories.getValue() == null ? "All" : categories.getValue();
+            List<Notification> shown = notifications.stream()
+                    .filter(notification -> "All".equals(selected)
+                            || selected.equalsIgnoreCase(notification.getCategory()))
+                    .toList();
+            List<Listing> listings;
+            try {
+                listings = DataService.getSellerListings();
+            } catch (IllegalStateException | SecurityException ex) {
+                listings = List.of();
+            }
+            if (shown.isEmpty()) {
+                list.getChildren().add(styled("No notifications in this category.",
+                        "-fx-text-fill: #9aa0b0; -fx-font-size: 13px;"));
+            }
+            for (Notification notification : shown) {
                 VBox item = new VBox(4);
                 item.getStyleClass().add("notif-item");
-                Label t = new Label(n.getTitle());
-                t.setStyle("-fx-font-weight: bold;");
-                Label status = new Label(n.isRead() ? "Read" : "Unread");
-                status.setStyle(n.isRead()
-                        ? "-fx-text-fill: #9aa0b0; -fx-font-size: 11px;"
-                        : "-fx-text-fill: #A68137; -fx-font-size: 11px; -fx-font-weight: bold;");
-                Label meta = new Label(n.getCategory() + " · " +
-                        n.getTimestamp().format(DateTimeFormatter.ofPattern("dd MMM HH:mm")));
-                meta.setStyle("-fx-text-fill: #9aa0b0; -fx-font-size: 11px;");
-                Button view = new Button("View details");
-                view.getStyleClass().addAll("btn-outline", "btn-sm");
-                view.setOnAction(e -> viewNotification(user, n));
-                item.getChildren().addAll(t, status, meta, view);
-                root.getChildren().add(item);
+                if (!notification.isRead()) item.setStyle("-fx-border-color: #003974; -fx-border-width: 0 0 0 3;");
+                String listingId = listingIdForNotification(notification, listings);
+                HBox footer = new HBox(8);
+                footer.setAlignment(Pos.CENTER_LEFT);
+                Region spacer = new Region();
+                HBox.setHgrow(spacer, Priority.ALWAYS);
+                String when = notification.getTimestamp() == null ? ""
+                        : notification.getTimestamp().format(DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm:ss"));
+                footer.getChildren().add(styled(notification.getCategory() + " · " + when,
+                        "-fx-text-fill: #9aa0b0; -fx-font-size: 11px;"));
+                footer.getChildren().add(spacer);
+                if (listingId != null) {
+                    Button go = new Button("Go ->");
+                    go.getStyleClass().addAll("btn-outline", "btn-sm");
+                    go.addEventFilter(MouseEvent.MOUSE_CLICKED, MouseEvent::consume);
+                    String targetId = listingId;
+                    go.setOnAction(event -> openNotificationListing(user, notification, targetId));
+                    footer.getChildren().add(go);
+                }
+                item.getChildren().addAll(
+                        styled(notification.getTitle(), "-fx-font-weight: bold; -fx-text-fill: #1a1a2e;"),
+                        styled(notification.getMessage(), "-fx-text-fill: #5a5a7a; -fx-font-size: 13px;"),
+                        footer
+                );
+                item.setOnMouseClicked(event -> {
+                    if (notification.isRead()) return;
+                    if (!markNotificationRead(user, notification)) return;
+                    item.setStyle(null);
+                });
+                list.getChildren().add(item);
             }
-        }
-        contentPane.getChildren().add(new ScrollPane(root));
+            refreshNotificationDot();
+        };
+        categories.setOnAction(event -> {
+            notificationCategory = categories.getValue();
+            render.run();
+        });
+        root.getChildren().addAll(new HBox(8, new Label("Category"), categories), list);
+        render.run();
+        ScrollPane scroll = new ScrollPane(root);
+        scroll.setFitToWidth(true);
+        scroll.setStyle("-fx-background-color: transparent; -fx-background: transparent;");
+        contentPane.getChildren().add(scroll);
     }
 
-    private void viewNotification(User user, Notification notification) {
-        Alert details = new Alert(Alert.AlertType.INFORMATION, notification.getMessage(), ButtonType.CLOSE);
-        details.setTitle("Notification Details");
-        details.setHeaderText(notification.getTitle() + " · " + notification.getCategory()
-                + " · " + notification.getTimestamp().format(DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm")));
-        details.showAndWait();
-
-        if (notification.isRead()) return;
+    private void openNotificationListing(User user, Notification notification, String listingId) {
+        if (!markNotificationRead(user, notification)) return;
+        Listing listing;
         try {
-            DatabaseManager.markNotificationRead(user.getUsername(), notification.getId());
-        } catch (IllegalStateException e) {
-            showProfileError("Could not mark notification as read: " + e.getMessage());
+            listing = DataService.getSellerListings().stream()
+                    .filter(item -> listingId.equals(item.getId()))
+                    .findFirst()
+                    .orElse(null);
+        } catch (IllegalStateException | SecurityException ex) {
+            showProfileError(ex.getMessage());
             return;
         }
-        notification.setRead(true);
-        showNotifications();
+        if (listing == null) {
+            showProfileError("This listing is no longer available.");
+            showNotifications();
+            return;
+        }
+        showListingDetails(listing, true);
+    }
+
+    private String listingIdForNotification(Notification notification, List<Listing> listings) {
+        if (notification.getListingId() != null) {
+            String id = Integer.toString(notification.getListingId());
+            for (Listing listing : listings) {
+                if (id.equals(listing.getId())) return id;
+            }
+        }
+        String message = notification.getMessage() == null ? "" : notification.getMessage();
+        Listing best = null;
+        int bestLength = 0;
+        for (Listing listing : listings) {
+            String name = listing.getTitle();
+            if (name == null || name.isBlank() || !message.contains(name) || name.length() <= bestLength) continue;
+            best = listing;
+            bestLength = name.length();
+        }
+        return best == null ? null : best.getId();
+    }
+
+    private boolean markNotificationRead(User user, Notification notification) {
+        if (notification.isRead()) return true;
+        try {
+            DatabaseManager.markNotificationRead(user.getUsername(), notification.getId());
+            notification.setRead(true);
+            refreshNotificationDot();
+            return true;
+        } catch (IllegalStateException e) {
+            showProfileError("Could not mark notification as read: " + e.getMessage());
+            return false;
+        }
     }
 
     @FXML
