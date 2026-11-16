@@ -461,7 +461,8 @@ public class DataService {
         DatabaseManager.createNotification(buyerUsername, seller,
                 "New seller chat message",
                 "The seller replied to your message about " + listing.get("item_name") + ".",
-                "Chat");
+                "Chat", DatabaseManager.latestBuyerRequestId(buyerUsername, parseListingId(listingId)),
+                parseListingId(listingId));
     }
 
     public static ChatHistory getBuyerListingChat(String listingId) {
@@ -549,12 +550,7 @@ public class DataService {
         if (recipient == null) return List.of();
         List<Notification> notifications = new ArrayList<>();
         for (Map<String, Object> row : DatabaseManager.fetchRows("notifications", Map.of("username", recipient.get("username")))) {
-            Notification notification = new Notification((String) row.get("username"), (String) row.get("title"),
-                    (String) row.get("message"), (String) row.get("category"));
-            notification.setId(row.get("notification_id").toString());
-            notification.setTimestamp(parseDate((String) row.get("timestamp")));
-            notification.setRead(((Number) row.get("is_read")).intValue() != 0);
-            notifications.add(notification);
+            notifications.add(toNotification(row));
         }
         notifications.sort(Comparator.comparing(Notification::getTimestamp).reversed());
         return notifications;
@@ -650,6 +646,8 @@ public class DataService {
         notification.setId(row.get("notification_id").toString());
         notification.setTimestamp(parseDate((String) row.get("timestamp")));
         notification.setRead(((Number) row.get("is_read")).intValue() != 0);
+        if (row.get("request_id") instanceof Number requestId) notification.setRequestId(requestId.intValue());
+        if (row.get("listing_id") instanceof Number listingId) notification.setListingId(listingId.intValue());
         return notification;
     }
 

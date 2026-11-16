@@ -10,6 +10,8 @@ public class Notification {
     private String category; // Offer, Chat, System, Rating, etc.
     private LocalDateTime timestamp;
     private boolean read;
+    private Integer requestId;
+    private Integer listingId;
 
     public Notification() {
         this.timestamp = LocalDateTime.now();
@@ -45,4 +47,10 @@ public class Notification {
 
     public boolean isRead() { return read; }
     public void setRead(boolean read) { this.read = read; }
+
+    public Integer getRequestId() { return requestId; }
+    public void setRequestId(Integer requestId) { this.requestId = requestId; }
+
+    public Integer getListingId() { return listingId; }
+    public void setListingId(Integer listingId) { this.listingId = listingId; }
 }

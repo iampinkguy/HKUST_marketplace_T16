@@ -16,9 +16,11 @@ import javafx.collections.FXCollections;
 import javafx.fxml.FXML;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.scene.Cursor;
 import javafx.scene.control.*;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.*;
 import javafx.util.Duration;
 
@@ -33,12 +35,14 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class BuyerDashboardController {
 
     private enum Page { BROWSE, DETAIL, DEALS, HISTORY, FAVOURITES, NOTIFICATIONS, PROFILE, CLOSED }
 
-    private enum DetailMode { MARKET, DEAL, FINISHED }
+    private enum DetailMode { MARKET, DEAL, FINISHED, HISTORY, NOTICE, NOTICE_FINISHED }
 
     @FXML private StackPane contentPane;
     @FXML private Label pageTitle;
@@ -71,6 +75,8 @@ public class BuyerDashboardController {
     private String historyKeyword = "";
 
     private long announcedVersion = -1;
+    private Page afterDetail = Page.BROWSE;
+    private static final Pattern REQUEST_MARKER = Pattern.compile("\\(request (\\d+)\\)");
 
     @FXML
     public void initialize() {
@@ -314,8 +320,12 @@ public class BuyerDashboardController {
         close.getStyleClass().addAll("btn-outline", "btn-sm");
         close.setOnAction(event -> {
             stopDetailWatch();
-            if (mode == DetailMode.DEAL || mode == DetailMode.FINISHED) showMyDeals();
-            else showBrowse();
+            switch (afterDetail) {
+                case HISTORY -> showHistory();
+                case DEALS -> showMyDeals();
+                case NOTIFICATIONS -> showNotifications();
+                default -> showBrowse();
+            }
         });
         header.getChildren().addAll(styled(listing.getTitle(), "-fx-font-size: 22px; -fx-font-weight: bold;"), spacer, close);
 
@@ -371,7 +381,14 @@ public class BuyerDashboardController {
                     + "\n" + textValue(review.get("text")) + reply, muted()));
         }
 
-        boolean finishedView = mode == DetailMode.FINISHED;
+        boolean finishedView = mode == DetailMode.FINISHED || mode == DetailMode.HISTORY
+                || mode == DetailMode.NOTICE_FINISHED;
+        afterDetail = switch (mode) {
+            case HISTORY -> Page.HISTORY;
+            case DEAL, FINISHED -> Page.DEALS;
+            case NOTICE, NOTICE_FINISHED -> Page.NOTIFICATIONS;
+            default -> Page.BROWSE;
+        };
         boolean available = "LIVE".equals(listing.getStatus().name()) && "Available".equals(listing.getAvailabilityStatus());
         boolean ownsDeal = buyerOwnsActiveDeal(listing.getId());
         HBox actions = new HBox(8);
@@ -861,14 +878,10 @@ public class BuyerDashboardController {
             historyKeyword = search.getText().trim();
             showHistory();
         });
-        root.getChildren().add(new HBox(8, new Label("From"), from, new Label("To"), to, categories, seller, search, apply));
-
-        TableView<String[]> table = new TableView<>();
-        table.getStyleClass().add("deal-history-table");
-        table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
-        table.getColumns().addAll(column("Item Title", 0), column("Seller", 1), column("Deal Date", 2),
-                column("Type", 3), column("Outcome", 4));
-        List<String[]> rows = new ArrayList<>();
+        VBox list = new VBox(12);
+        int bought = 0;
+        int borrowed = 0;
+        int received = 0;
         try {
             for (Map<String, Object> deal : DataService.getBuyerDeals()) {
                 if (deal.get("completed_at") == null && deal.get("returned_at") == null) continue;
@@ -887,23 +900,94 @@ public class BuyerDashboardController {
                     case "CLAIM" -> "Received";
                     default -> "Bought";
                 };
-                String outcome = deal.get("returned_at") != null ? "Returned" : "Completed";
-                rows.add(new String[]{
+                switch (dealTypeName) {
+                    case "Borrowed" -> borrowed++;
+                    case "Received" -> received++;
+                    default -> bought++;
+                }
+                String detail = switch (requestType) {
+                    case "OFFER" -> deal.get("offer_price") == null ? "" : "HK$" + trimNumber(deal.get("offer_price"));
+                    case "BORROW" -> formatRange(deal.get("borrow_start"), deal.get("borrow_end"));
+                    case "CLAIM" -> "Giveaway";
+                    default -> "";
+                };
+                list.getChildren().add(historyCard(
                         textValue(deal.get("item_name")),
                         textValue(deal.get("seller_name")),
-                        dealDate == null ? "" : dealDate.format(DateTimeFormatter.ISO_LOCAL_DATE),
+                        textValue(deal.get("category")),
+                        dealDate == null ? "Date unavailable" : dealDate.format(DateTimeFormatter.ofPattern("dd MMM yyyy")),
                         dealTypeName,
-                        outcome
-                });
+                        deal.get("returned_at") != null ? "Returned" : "Completed",
+                        detail,
+                        deal.get("listing_id") == null ? "" : String.valueOf(deal.get("listing_id"))));
             }
         } catch (IllegalStateException | SecurityException ex) {
             alert(Alert.AlertType.ERROR, ex.getMessage());
         }
-        table.setItems(FXCollections.observableArrayList(rows));
-        root.getChildren().add(table);
-        VBox.setVgrow(table, Priority.ALWAYS);
-        contentPane.getChildren().add(root);
+        if (list.getChildren().isEmpty()) {
+            list.getChildren().add(styled("No completed deals match these filters.", muted()));
+        }
+        HBox summary = new HBox(8, badge(bought + " bought", "badge-bought"),
+                badge(borrowed + " borrowed", "badge-borrowed"),
+                badge(received + " received", "badge-received"),
+                styled("Click a deal to open its listing.", faint()));
+        summary.setAlignment(Pos.CENTER_LEFT);
+        ScrollPane scroller = scroll(list);
+        VBox.setVgrow(scroller, Priority.ALWAYS);
+        root.getChildren().addAll(
+                new HBox(8, new Label("From"), from, new Label("To"), to, categories, seller, search, apply),
+                summary,
+                scroller);
         contentPane.getChildren().setAll(root);
+    }
+
+    private VBox historyCard(String title, String seller, String category, String date, String typeName,
+                             String outcome, String detail, String listingId) {
+        String accent = switch (typeName) {
+            case "Borrowed" -> "history-borrowed";
+            case "Received" -> "history-received";
+            default -> "history-bought";
+        };
+        String typeStyle = switch (typeName) {
+            case "Borrowed" -> "badge-borrowed";
+            case "Received" -> "badge-received";
+            default -> "badge-bought";
+        };
+        VBox card = new VBox(8);
+        card.getStyleClass().addAll("card", "card-hover", "history-card", accent);
+        card.setPadding(new Insets(14, 16, 14, 18));
+        card.setCursor(Cursor.HAND);
+        HBox top = new HBox(8);
+        top.setAlignment(Pos.CENTER_LEFT);
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+        top.getChildren().addAll(badge(typeName, typeStyle), spacer,
+                badge(outcome, "Returned".equals(outcome) ? "badge-returned" : "badge-sold"));
+        HBox bottom = new HBox(8);
+        bottom.setAlignment(Pos.CENTER_LEFT);
+        Region footSpace = new Region();
+        HBox.setHgrow(footSpace, Priority.ALWAYS);
+        String meta = date + (detail == null || detail.isBlank() ? "" : " · " + detail);
+        bottom.getChildren().addAll(styled(meta, faint()), footSpace,
+                styled("View listing", "-fx-text-fill: #003974; -fx-font-size: 12px; -fx-font-weight: bold;"));
+        card.getChildren().addAll(top,
+                styled(title, "-fx-font-size: 16px; -fx-font-weight: bold; -fx-text-fill: #1a1a2e;"),
+                styled(seller + " · " + (category == null || category.isBlank() ? "Uncategorised" : category), muted()),
+                bottom);
+        card.setOnMouseClicked(event -> {
+            if (listingId == null || listingId.isBlank()) {
+                alert(Alert.AlertType.ERROR, "This listing is no longer available.");
+                return;
+            }
+            showListingDetail(listingId, DetailMode.HISTORY);
+        });
+        return card;
+    }
+
+    private Label badge(String text, String styleClass) {
+        Label label = new Label(text);
+        label.getStyleClass().addAll("badge", styleClass);
+        return label;
     }
 
     @FXML
@@ -950,16 +1034,37 @@ public class BuyerDashboardController {
             List<Notification> shown = notifications.stream()
                     .filter(notification -> "All".equals(selected) || selected.equalsIgnoreCase(notification.getCategory()))
                     .toList();
+            List<Map<String, Object>> deals;
+            try {
+                deals = DataService.getBuyerDeals();
+            } catch (IllegalStateException | SecurityException ex) {
+                deals = List.of();
+            }
             if (shown.isEmpty()) list.getChildren().add(styled("No notifications in this category.", muted()));
             for (Notification notification : shown) {
                 VBox item = new VBox(4);
                 item.getStyleClass().add("notif-item");
                 if (!notification.isRead()) item.setStyle("-fx-border-color: #003974; -fx-border-width: 0 0 0 3;");
+                Map<String, Object> deal = dealForNotification(notification, deals);
+                String listingId = listingIdForNotification(notification, deal);
+                HBox footer = new HBox(8);
+                footer.setAlignment(Pos.CENTER_LEFT);
+                Region spacer = new Region();
+                HBox.setHgrow(spacer, Priority.ALWAYS);
+                footer.getChildren().add(styled(notification.getCategory() + " · " + (notification.getTimestamp() == null ? ""
+                        : notification.getTimestamp().format(DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm:ss"))), faint()));
+                footer.getChildren().add(spacer);
+                if (listingId != null) {
+                    Button go = new Button("Go ->");
+                    go.getStyleClass().addAll("btn-outline", "btn-sm");
+                    go.addEventFilter(MouseEvent.MOUSE_CLICKED, MouseEvent::consume);
+                    go.setOnAction(event -> openNotificationDeal(notification, deal, listingId));
+                    footer.getChildren().add(go);
+                }
                 item.getChildren().addAll(
                         styled(notification.getTitle(), "-fx-font-weight: bold; -fx-text-fill: #1a1a2e;"),
                         styled(notification.getMessage(), "-fx-text-fill: #5a5a7a; -fx-font-size: 13px;"),
-                        styled(notification.getCategory() + " · " + (notification.getTimestamp() == null ? ""
-                                : notification.getTimestamp().format(DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm:ss"))), faint())
+                        footer
                 );
                 item.setOnMouseClicked(event -> {
                     try {
@@ -977,6 +1082,68 @@ public class BuyerDashboardController {
         root.getChildren().addAll(new HBox(8, new Label("Category"), categories), list);
         render.run();
         contentPane.getChildren().setAll(scroll(root));
+    }
+
+    private void openNotificationDeal(Notification notification, Map<String, Object> deal, String listingId) {
+        try {
+            DataService.markBuyerNotificationRead(notification.getId());
+        } catch (IllegalStateException | SecurityException ex) {
+            alert(Alert.AlertType.ERROR, ex.getMessage());
+            return;
+        }
+        DetailMode mode = deal == null ? DetailMode.NOTICE
+                : DataService.isBuyerDealFinished(deal) ? DetailMode.NOTICE_FINISHED : DetailMode.NOTICE;
+        showListingDetail(listingId, mode);
+    }
+
+    private Map<String, Object> dealForNotification(Notification notification, List<Map<String, Object>> deals) {
+        Integer requestId = notification.getRequestId();
+        if (requestId == null && notification.getMessage() != null) {
+            Matcher marker = REQUEST_MARKER.matcher(notification.getMessage());
+            if (marker.find()) requestId = Integer.parseInt(marker.group(1));
+        }
+        if (requestId != null) {
+            for (Map<String, Object> deal : deals) {
+                if (deal.get("request_id") instanceof Number id && id.intValue() == requestId) return deal;
+            }
+        }
+        if (notification.getListingId() != null) {
+            for (Map<String, Object> deal : deals) {
+                if (deal.get("listing_id") instanceof Number id
+                        && id.intValue() == notification.getListingId()) return deal;
+            }
+        }
+        String message = notification.getMessage() == null ? "" : notification.getMessage();
+        Map<String, Object> best = null;
+        int bestLength = 0;
+        for (Map<String, Object> deal : deals) {
+            String name = textValue(deal.get("item_name"));
+            if (name.isBlank() || !message.contains(name) || name.length() < bestLength) continue;
+            boolean betterStatus = name.length() == bestLength
+                    && statusMatchesNotification(notification, deal)
+                    && (best == null || !statusMatchesNotification(notification, best));
+            if (name.length() > bestLength || betterStatus) {
+                best = deal;
+                bestLength = name.length();
+            }
+        }
+        return best;
+    }
+
+    private boolean statusMatchesNotification(Notification notification, Map<String, Object> deal) {
+        String title = notification.getTitle() == null ? "" : notification.getTitle().toLowerCase(Locale.ROOT);
+        String status = String.valueOf(deal.get("status"));
+        if (title.contains("counter")) return "COUNTERED".equals(status);
+        if (title.contains("declin") || title.contains("no longer available")) return "DECLINED".equals(status);
+        if (title.contains("accepted")) return "ACCEPTED".equals(status);
+        if (title.contains("ended") || title.contains("returned")) return deal.get("returned_at") != null;
+        if (title.contains("reminder") || title.contains("due")) return deal.get("returned_at") == null;
+        return false;
+    }
+
+    private String listingIdForNotification(Notification notification, Map<String, Object> deal) {
+        if (deal != null && deal.get("listing_id") != null) return String.valueOf(deal.get("listing_id"));
+        return notification.getListingId() == null ? null : notification.getListingId().toString();
     }
 
     @FXML
@@ -1107,12 +1274,6 @@ public class BuyerDashboardController {
         box.getItems().addAll(values);
         box.setValue(box.getItems().contains(selected) ? selected : allLabel);
         return box;
-    }
-
-    private TableColumn<String[], String> column(String title, int index) {
-        TableColumn<String[], String> column = new TableColumn<>(title);
-        column.setCellValueFactory(cell -> new javafx.beans.property.SimpleStringProperty(cell.getValue()[index]));
-        return column;
     }
 
     private Label fact(String name, String value) {
