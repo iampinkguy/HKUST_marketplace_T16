@@ -22,9 +22,11 @@ import javafx.scene.layout.*;
 import javafx.stage.FileChooser;
 
 import java.nio.file.Path;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 public class SellerDashboardController {
@@ -88,46 +90,6 @@ public class SellerDashboardController {
             case "CLAIM" -> "Giveaway claim";
             default -> "Request";
         };
-    }
-
-    private void showRequestChat(int requestId) {
-        Dialog<Void> dialog = new Dialog<>();
-        dialog.setTitle("Request Chat");
-        dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
-        VBox messages = new VBox(8);
-        messages.setPadding(new Insets(8));
-        ScrollPane scroll = new ScrollPane(messages);
-        scroll.setFitToWidth(true);
-        scroll.setPrefViewportHeight(300);
-        TextField input = new TextField();
-        input.setPromptText("Write a message...");
-        Button send = new Button("Send");
-        send.getStyleClass().add("btn-gold");
-        Runnable refresh = () -> {
-            messages.getChildren().clear();
-            try {
-                for (Map<String, Object> message : DataService.getRequestMessages(requestId)) {
-                    Label line = new Label(message.get("sender_username") + ": " + message.get("content"));
-                    line.setWrapText(true);
-                    messages.getChildren().add(line);
-                }
-                scroll.setVvalue(1);
-            } catch (IllegalStateException | SecurityException e) {
-                showProfileError("Could not load request chat: " + e.getMessage());
-            }
-        };
-        send.setOnAction(event -> {
-            try {
-                DataService.sendRequestMessage(requestId, input.getText());
-                input.clear();
-                refresh.run();
-            } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
-                showProfileError("Could not send message: " + e.getMessage());
-            }
-        });
-        dialog.getDialogPane().setContent(new VBox(8, scroll, new HBox(8, input, send)));
-        refresh.run();
-        dialog.showAndWait();
     }
 
     private HBox createListingRow(Listing l) {
@@ -405,55 +367,124 @@ public class SellerDashboardController {
     }
 
     private void showListingDetails(Listing listing) {
-        String priceOrDuration = switch (listing.getType()) {
-            case SELL -> "Price: HK$ " + listing.getPrice();
-            case LEND -> "Lending duration: " + listing.getLendingDays() + " days";
-            case GIVEAWAY -> "Free";
-        };
-        String details = "Status: " + listing.getStatus().name().replace('_', ' ')
-                + "\nType: " + listing.getTypeDisplay()
-                + "\nCategory: " + listing.getCategory()
-                + "\nCondition: " + listing.getCondition()
-                + "\n" + priceOrDuration
-                + "\nMeet-up: " + listing.getMeetupLocation()
-                + "\nPhotos: " + listing.getPhotoPaths().size()
-                + "\n\n" + listing.getDescription()
-                + (listing.getRejectionReason() == null ? "" : "\n\nAdmin feedback: " + listing.getRejectionReason());
-        Dialog<ButtonType> dialog = new Dialog<>();
-        dialog.setTitle("Listing Details");
-        dialog.setHeaderText(listing.getTitle());
-        dialog.setResizable(true);
+        setActive(btnListings, "Listing Detail");
+        contentPane.getChildren().clear();
 
-        VBox body = new VBox(12);
-        body.setPadding(new Insets(12));
-        Label fields = new Label(details);
-        fields.setWrapText(true);
-        body.getChildren().addAll(fields,
-                new Label("Photos — select a photo to view it at full size"),
-                createPhotoGallery(listing.getPhotoPaths()));
+        VBox root = new VBox(14);
+        root.setPadding(new Insets(4));
 
-        Label requestsTitle = new Label("Incoming offers & requests");
-        requestsTitle.getStyleClass().add("section-title");
+        HBox header = new HBox(8);
+        header.setAlignment(Pos.CENTER_LEFT);
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+        Button close = new Button("X");
+        close.getStyleClass().addAll("btn-outline", "btn-sm");
+        close.setOnAction(e -> showMyListings());
+        header.getChildren().addAll(
+                styled(listing.getTitle(), "-fx-font-size: 22px; -fx-font-weight: bold;"),
+                spacer,
+                close);
+
+        FlowPane photos = createPhotoGallery(listing.getPhotoPaths());
+
+        VBox facts = new VBox(6);
+        facts.getChildren().addAll(
+                fact("Description", listing.getDescription()),
+                fact("Category", listing.getCategory()),
+                fact("Type", listing.getTypeDisplay()),
+                fact("Price", listing.getPriceDisplay()),
+                fact("Condition", listing.getCondition()),
+                fact("Meet-up location", listing.getMeetupLocation()),
+                fact("Posted", formatDate(listing.getPostedAt())),
+                fact("Availability", listing.getAvailabilityStatus() + " · " + listing.getStatus()),
+                fact("Views", Integer.toString(listing.getViewCount()))
+        );
+        if (listing.getRejectionReason() != null && !listing.getRejectionReason().isBlank()) {
+            facts.getChildren().add(fact("Admin feedback", listing.getRejectionReason()));
+        }
+
+        HBox actions = new HBox(8);
+        Button edit = new Button("Edit Listing");
+        edit.getStyleClass().add("btn-primary");
+        edit.setOnAction(e -> showListingForm(listing));
+        Button openChat = new Button("Open Chat Room");
+        openChat.getStyleClass().add("btn-primary");
+        openChat.setOnAction(e -> showSellerListingChat(listing, null));
+        actions.getChildren().addAll(edit, openChat);
+        if (listing.getStatus() == ListingStatus.LIVE || listing.getStatus() == ListingStatus.RESERVED) {
+            Button complete = new Button("Mark Complete");
+            complete.getStyleClass().add("btn-gold");
+            complete.setOnAction(e -> markListingComplete(listing));
+            actions.getChildren().add(complete);
+        }
+
+        Label requestsTitle = styled("Incoming offers & requests", "-fx-font-weight: bold;");
         VBox requests = new VBox(10);
         Label requestFeedback = new Label();
         requestFeedback.setWrapText(true);
-        body.getChildren().addAll(new Separator(), requestsTitle, requestFeedback, requests);
+        requestFeedback.setStyle("-fx-text-fill: #8a5a00;");
 
-        Label chatTitle = new Label("Chat room");
-        chatTitle.getStyleClass().add("section-title");
-        body.getChildren().addAll(new Separator(), chatTitle, createSellerListingChat(listing));
+        root.getChildren().addAll(header, photos, facts, actions,
+                requestsTitle, requestFeedback, requests);
 
-        ScrollPane scroll = new ScrollPane(body);
+        ScrollPane scroll = new ScrollPane(root);
         scroll.setFitToWidth(true);
-        scroll.setPrefViewportWidth(720);
-        scroll.setPrefViewportHeight(650);
-        dialog.getDialogPane().setContent(scroll);
-        dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+        scroll.setStyle("-fx-background-color: transparent;");
+        contentPane.getChildren().add(scroll);
         refreshListingRequests(listing, requests, requestFeedback);
+    }
+
+    private void markListingComplete(Listing listing) {
+        Alert conf = new Alert(Alert.AlertType.CONFIRMATION,
+                "Mark '" + listing.getTitle() + "' as complete? It will no longer be available on the marketplace.",
+                ButtonType.CANCEL, ButtonType.OK);
+        conf.setHeaderText("Mark listing complete");
+        conf.showAndWait().ifPresent(response -> {
+            if (response != ButtonType.OK) return;
+            try {
+                DataService.completeSellerListing(listing.getId(), listing.getReviewVersion());
+                new Alert(Alert.AlertType.INFORMATION, "Listing marked as complete.").showAndWait();
+                showMyListings();
+            } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+                showProfileError("Could not complete listing: " + ex.getMessage());
+            }
+        });
+    }
+
+    private void showSellerListingChat(Listing listing, String buyerUsername) {
+        Dialog<Void> dialog = new Dialog<>();
+        dialog.setTitle("Chat room");
+        dialog.setHeaderText(buyerUsername == null || buyerUsername.isBlank()
+                ? "Chat about " + listing.getTitle()
+                : "Chat with " + buyerUsername + " about " + listing.getTitle());
+        dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+        ((Button) dialog.getDialogPane().lookupButton(ButtonType.CLOSE)).setText("X");
+        VBox chat = createSellerListingChat(listing, buyerUsername);
+        chat.setPrefWidth(480);
+        dialog.getDialogPane().setContent(chat);
         dialog.showAndWait();
     }
 
-    private VBox createSellerListingChat(Listing listing) {
+    private Label fact(String name, String value) {
+        Label label = new Label(name + ": " + (value == null || value.isBlank() ? "—" : value));
+        label.setWrapText(true);
+        return label;
+    }
+
+    private Label styled(String text, String style) {
+        Label label = new Label(text);
+        label.setWrapText(true);
+        label.setStyle(style);
+        return label;
+    }
+
+    private String formatDate(LocalDateTime value) {
+        return value == null
+                ? "Date unavailable"
+                : value.format(DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm", Locale.ENGLISH));
+    }
+
+    private VBox createSellerListingChat(Listing listing, String preferredBuyer) {
         VBox chat = new VBox(8);
         ComboBox<String> buyerSelector = new ComboBox<>();
         buyerSelector.setPromptText("Select buyer conversation");
@@ -468,7 +499,7 @@ public class SellerDashboardController {
                     setText(null);
                 } else {
                     String timestamp = message.getTimestamp() == null ? ""
-                            : message.getTimestamp().format(DateTimeFormatter.ofPattern("dd MMM HH:mm"));
+                            : message.getTimestamp().format(DateTimeFormatter.ofPattern("dd MMM HH:mm", Locale.ENGLISH));
                     setText(message.getSender_id() + " (" + timestamp + ")\n" + message.getContent());
                     setWrapText(true);
                 }
@@ -507,9 +538,14 @@ public class SellerDashboardController {
         Runnable reloadBuyers = () -> {
             try {
                 String selected = buyerSelector.getValue();
-                List<String> buyers = DataService.getSellerListingChatBuyers(listing.getId());
+                List<String> buyers = new ArrayList<>(DataService.getSellerListingChatBuyers(listing.getId()));
+                if (preferredBuyer != null && !preferredBuyer.isBlank() && !buyers.contains(preferredBuyer)) {
+                    buyers.add(0, preferredBuyer);
+                }
                 buyerSelector.getItems().setAll(buyers);
-                if (selected != null && buyers.contains(selected)) {
+                if (preferredBuyer != null && !preferredBuyer.isBlank() && buyers.contains(preferredBuyer)) {
+                    buyerSelector.setValue(preferredBuyer);
+                } else if (selected != null && buyers.contains(selected)) {
                     buyerSelector.setValue(selected);
                 } else if (!buyers.isEmpty()) {
                     buyerSelector.setValue(buyers.get(0));
@@ -567,32 +603,16 @@ public class SellerDashboardController {
                 accept.getStyleClass().add("btn-gold");
                 Button decline = new Button("Decline");
                 decline.getStyleClass().add("btn-danger");
-                Button counter = new Button("Counter Offer");
-                counter.getStyleClass().add("btn-outline");
-                counter.setDisable(!"OFFER".equals(request.get("request_type")));
                 Button chat = new Button("Open Chat Room");
                 chat.getStyleClass().add("btn-outline");
                 int requestId = ((Number) request.get("request_id")).intValue();
+                String buyerUsername = String.valueOf(request.get("buyer_username"));
                 accept.setOnAction(event -> resolveListingRequest(
                         listing, requestId, "ACCEPT", null, requests, feedback));
                 decline.setOnAction(event -> resolveListingRequest(
                         listing, requestId, "DECLINE", null, requests, feedback));
-                counter.setOnAction(event -> {
-                    TextInputDialog prompt = new TextInputDialog();
-                    prompt.setTitle("Counter Offer");
-                    prompt.setHeaderText("Counteroffer for " + listing.getTitle());
-                    prompt.setContentText("Your price (HK$):");
-                    prompt.showAndWait().ifPresent(value -> {
-                        try {
-                            resolveListingRequest(listing, requestId, "COUNTER",
-                                    Double.parseDouble(value), requests, feedback);
-                        } catch (NumberFormatException e) {
-                            feedback.setText("Enter a valid counteroffer amount.");
-                        }
-                    });
-                });
-                chat.setOnAction(event -> showRequestChat(requestId));
-                card.getChildren().addAll(buyer, summary, new HBox(8, accept, decline, counter, chat));
+                chat.setOnAction(event -> showSellerListingChat(listing, buyerUsername));
+                card.getChildren().addAll(buyer, summary, new HBox(8, accept, decline, chat));
                 requests.getChildren().add(card);
             }
         } catch (IllegalStateException | SecurityException e) {
@@ -617,33 +637,35 @@ public class SellerDashboardController {
 
     private FlowPane createPhotoGallery(List<String> paths) {
         FlowPane gallery = new FlowPane(10, 10);
-        gallery.setPrefWrapLength(680);
-        if (paths.isEmpty()) gallery.getChildren().add(new Label("No photos supplied."));
-        for (int index = 0; index < paths.size(); index++) {
+        gallery.setPrefWrapLength(880);
+        if (paths.isEmpty()) {
+            gallery.getChildren().add(new Label("No photos supplied."));
+            return gallery;
+        }
+        int shown = Math.min(6, paths.size());
+        for (int index = 0; index < shown; index++) {
             String path = paths.get(index);
             try {
                 String uri = path.startsWith("file:")
                         ? path : Path.of(path).toAbsolutePath().toUri().toString();
-                Image image = new Image(uri, false);
+                Image image = new Image(uri, 220, 160, true, true, false);
                 if (image.isError()) throw new IllegalArgumentException("Photo could not be opened.");
                 ImageView preview = new ImageView(image);
                 preview.setPreserveRatio(true);
-                preview.setFitWidth(300);
-                preview.setFitHeight(230);
+                preview.setFitWidth(220);
+                preview.setFitHeight(160);
                 Button photo = new Button("Photo " + (index + 1), preview);
                 photo.setContentDisplay(ContentDisplay.TOP);
+                int number = index + 1;
                 photo.setOnAction(event -> {
                     Dialog<ButtonType> fullPhoto = new Dialog<>();
-                    fullPhoto.setTitle("Listing Photo");
-                    fullPhoto.setResizable(true);
+                    fullPhoto.setTitle("Photo " + number);
+                    fullPhoto.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
                     ImageView enlargedImage = new ImageView(image);
                     enlargedImage.setPreserveRatio(true);
-                    enlargedImage.setSmooth(true);
-                    enlargedImage.setFitWidth(900);
-                    enlargedImage.setFitHeight(650);
+                    enlargedImage.setFitWidth(640);
+                    enlargedImage.setFitHeight(480);
                     fullPhoto.getDialogPane().setContent(enlargedImage);
-                    fullPhoto.getDialogPane().setPrefSize(940, 720);
-                    fullPhoto.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
                     fullPhoto.showAndWait();
                 });
                 gallery.getChildren().add(photo);

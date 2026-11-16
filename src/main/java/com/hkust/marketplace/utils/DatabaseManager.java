@@ -822,6 +822,139 @@ public class DatabaseManager {
         if (replacePhotos) deleteStoredPhotos(oldPhotos, "updated");
     }
 
+    /** Marks a seller-owned listing complete (SOLD / LENT / GIVEN) and closes open requests. */
+    public static void completeSellerListing(String listingId, String sellerUsername, long expectedVersion) {
+        if (sellerUsername == null || sellerUsername.isBlank()) {
+            throw new IllegalArgumentException("A seller account is required.");
+        }
+        int id = parseListingId(listingId);
+        LocalDateTime now = LocalDateTime.now();
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            try {
+                String listingType;
+                String listingStatus;
+                String itemName;
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        SELECT listing_type, listing_status, item_name
+                        FROM listings
+                        WHERE listing_id = ? AND seller_username = ? COLLATE NOCASE
+                            AND review_version = ?
+                        """)) {
+                    statement.setInt(1, id);
+                    statement.setString(2, sellerUsername);
+                    statement.setLong(3, expectedVersion);
+                    try (ResultSet result = statement.executeQuery()) {
+                        if (!result.next()) {
+                            throw new IllegalStateException(
+                                    "This listing is no longer available or has changed. Refresh and try again.");
+                        }
+                        listingType = result.getString("listing_type");
+                        listingStatus = result.getString("listing_status");
+                        itemName = result.getString("item_name");
+                    }
+                }
+                if (!"LIVE".equals(listingStatus) && !"RESERVED".equals(listingStatus)) {
+                    throw new IllegalStateException("Only live or reserved listings can be marked complete.");
+                }
+                String completedStatus = switch (listingType) {
+                    case "SELL" -> "SOLD";
+                    case "LEND" -> "LENT";
+                    case "GIVEAWAY" -> "GIVEN";
+                    default -> throw new IllegalStateException("Unsupported listing type.");
+                };
+                try (PreparedStatement update = connection.prepareStatement("""
+                        UPDATE listings
+                        SET listing_status = ?, availability_status = 'Unavailable'
+                        WHERE listing_id = ? AND seller_username = ? COLLATE NOCASE
+                            AND review_version = ?
+                            AND listing_status IN ('LIVE', 'RESERVED')
+                        """)) {
+                    update.setString(1, completedStatus);
+                    update.setInt(2, id);
+                    update.setString(3, sellerUsername);
+                    update.setLong(4, expectedVersion);
+                    if (update.executeUpdate() != 1) {
+                        throw new IllegalStateException(
+                                "This listing is no longer available or has changed. Refresh and try again.");
+                    }
+                }
+                try (PreparedStatement completeRequests = connection.prepareStatement("""
+                        UPDATE listing_requests
+                        SET completed_at = COALESCE(completed_at, ?), updated_at = ?
+                        WHERE listing_id = ? AND status = 'ACCEPTED'
+                            AND completed_at IS NULL AND returned_at IS NULL
+                        """)) {
+                    completeRequests.setString(1, now.toString());
+                    completeRequests.setString(2, now.toString());
+                    completeRequests.setInt(3, id);
+                    completeRequests.executeUpdate();
+                }
+                List<Map<String, Object>> openRequests = new ArrayList<>();
+                try (PreparedStatement pending = connection.prepareStatement("""
+                        SELECT request_id, buyer_username, status FROM listing_requests
+                        WHERE listing_id = ? AND status IN ('PENDING', 'COUNTERED')
+                        """)) {
+                    pending.setInt(1, id);
+                    try (ResultSet result = pending.executeQuery()) {
+                        while (result.next()) {
+                            openRequests.add(resultSetToMap(result));
+                        }
+                    }
+                }
+                if (!openRequests.isEmpty()) {
+                    try (PreparedStatement decline = connection.prepareStatement("""
+                            UPDATE listing_requests SET status = 'DECLINED', updated_at = ?
+                            WHERE listing_id = ? AND status IN ('PENDING', 'COUNTERED')
+                            """)) {
+                        decline.setString(1, now.toString());
+                        decline.setInt(2, id);
+                        decline.executeUpdate();
+                    }
+                }
+                for (Map<String, Object> request : openRequests) {
+                    insertNotification(connection,
+                            (String) request.get("buyer_username"),
+                            sellerUsername,
+                            "Listing completed",
+                            itemName + " was marked complete by the seller.",
+                            "Offer",
+                            ((Number) request.get("request_id")).intValue(),
+                            id);
+                }
+                try (PreparedStatement accepted = connection.prepareStatement("""
+                        SELECT request_id, buyer_username FROM listing_requests
+                        WHERE listing_id = ? AND status = 'ACCEPTED'
+                        """)) {
+                    accepted.setInt(1, id);
+                    try (ResultSet result = accepted.executeQuery()) {
+                        while (result.next()) {
+                            insertNotification(connection,
+                                    result.getString("buyer_username"),
+                                    sellerUsername,
+                                    "Listing completed",
+                                    itemName + " was marked complete by the seller.",
+                                    "System",
+                                    result.getInt("request_id"),
+                                    id);
+                        }
+                    }
+                }
+                connection.commit();
+            } catch (SQLException | RuntimeException e) {
+                try {
+                    connection.rollback();
+                } catch (SQLException rollbackError) {
+                    e.addSuppressed(rollbackError);
+                }
+                if (e instanceof RuntimeException runtimeException) throw runtimeException;
+                throw new IllegalStateException("Could not complete listing.", e);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not complete listing.", e);
+        }
+    }
+
     /** Permanently removes a seller-owned listing and its saved favourites. */
     public static void deleteSellerListing(String listingId, String sellerUsername, long expectedVersion) {
         if (sellerUsername == null || sellerUsername.isBlank()) {
