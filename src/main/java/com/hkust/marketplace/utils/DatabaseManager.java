@@ -2747,12 +2747,14 @@ public class DatabaseManager {
                             average_rating = COALESCE((
                                 SELECT AVG(r.rating) FROM reviews r
                                 JOIN listings l ON l.listing_id = r.listing_id
-                                WHERE l.seller = users.username OR l.seller_username = users.username
+                                WHERE (l.seller = users.username OR l.seller_username = users.username)
+                                  AND COALESCE(r.hidden, 0) = 0
                             ), 0),
                             rating_count = (
                                 SELECT COUNT(*) FROM reviews r
                                 JOIN listings l ON l.listing_id = r.listing_id
-                                WHERE l.seller = users.username OR l.seller_username = users.username
+                                WHERE (l.seller = users.username OR l.seller_username = users.username)
+                                  AND COALESCE(r.hidden, 0) = 0
                             )
                         WHERE username = ?
                         """)) {
@@ -2791,20 +2793,51 @@ public class DatabaseManager {
                        COALESCE(l.seller, l.seller_username) AS seller_username
                 FROM reviews r
                 JOIN listings l ON l.listing_id = r.listing_id
-                ORDER BY COALESCE(r.created_at, '') DESC
+                ORDER BY julianday(r.created_at) DESC, r.listing_id, r.buyer_username
                 """);
     }
 
-    public static void setReviewHidden(String buyerUsername, int listingId, boolean hidden) {
-        try (Connection connection = connect();
-             PreparedStatement statement = connection.prepareStatement("""
-                     UPDATE reviews SET hidden = ? WHERE buyer_username = ? AND listing_id = ?
-                     """)) {
-            statement.setInt(1, hidden ? 1 : 0);
-            statement.setString(2, buyerUsername);
-            statement.setInt(3, listingId);
-            if (statement.executeUpdate() != 1) {
-                throw new IllegalArgumentException("Review was not found.");
+    /** Visibility and public rating totals are saved together. */
+    public static void setReviewHidden(String admin, String buyerUsername, int listingId, boolean hidden) {
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            try {
+                checkListingAdmin(connection, admin);
+                String seller;
+                try (PreparedStatement find = connection.prepareStatement("""
+                        SELECT COALESCE(l.seller, l.seller_username) AS seller
+                        FROM reviews r JOIN listings l ON l.listing_id = r.listing_id
+                        WHERE r.buyer_username = ? AND r.listing_id = ?
+                        """)) {
+                    find.setString(1, buyerUsername); find.setInt(2, listingId);
+                    try (ResultSet result = find.executeQuery()) {
+                        if (!result.next()) throw new IllegalArgumentException("Review was not found. Refresh the ratings overview.");
+                        seller = result.getString("seller");
+                    }
+                }
+                try (PreparedStatement statement = connection.prepareStatement(
+                        "UPDATE reviews SET hidden = ? WHERE buyer_username = ? AND listing_id = ?")) {
+                    statement.setInt(1, hidden ? 1 : 0);
+                    statement.setString(2, buyerUsername); statement.setInt(3, listingId);
+                    if (statement.executeUpdate() != 1) throw new IllegalArgumentException("Review was not found.");
+                }
+                try (PreparedStatement totals = connection.prepareStatement("""
+                        UPDATE users SET
+                            average_rating = COALESCE((SELECT AVG(r.rating) FROM reviews r
+                                JOIN listings l ON l.listing_id = r.listing_id
+                                WHERE COALESCE(l.seller, l.seller_username) = users.username AND COALESCE(r.hidden, 0) = 0), 0),
+                            rating_count = (SELECT COUNT(*) FROM reviews r
+                                JOIN listings l ON l.listing_id = r.listing_id
+                                WHERE COALESCE(l.seller, l.seller_username) = users.username AND COALESCE(r.hidden, 0) = 0)
+                        WHERE username = ?
+                        """)) {
+                    totals.setString(1, seller); totals.executeUpdate();
+                }
+                connection.commit();
+            } catch (RuntimeException | SQLException e) {
+                connection.rollback();
+                if (e instanceof RuntimeException runtimeException) throw runtimeException;
+                throw new IllegalStateException("Could not update review visibility.", e);
             }
         } catch (SQLException e) {
             throw new IllegalStateException("Could not update review visibility.", e);
