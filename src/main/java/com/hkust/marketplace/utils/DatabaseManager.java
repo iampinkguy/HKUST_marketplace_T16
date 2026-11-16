@@ -28,6 +28,8 @@ import com.hkust.marketplace.models.Message;
 import com.hkust.marketplace.models.Notification;
 import com.hkust.marketplace.models.User;
 import com.hkust.marketplace.models.UserRole;
+import com.hkust.marketplace.models.Deal;
+import com.hkust.marketplace.models.Review;
 
 public class DatabaseManager {
 
@@ -186,6 +188,140 @@ public class DatabaseManager {
             """);
         migrateNotificationSchema();
         migrateBuyerDealColumns();
+        runSql("""
+                CREATE TABLE IF NOT EXISTS demo_data_seed (
+                    dataset_key TEXT PRIMARY KEY, seeded_at TEXT NOT NULL
+                )
+                """);
+    }
+
+    /** Writes the dataset atomically; the version marker prevents startup from recreating edited/deleted samples. */
+    public static void seedData(String datasetKey, List<User> users, List<Listing> listings, List<Deal> deals,
+                                List<Notification> notifications, List<Review> reviews) {
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            try {
+                if (seedId(connection, "SELECT 1 FROM demo_data_seed WHERE dataset_key = ?", datasetKey) != null) {
+                    connection.rollback();
+                    return;
+                }
+                Map<String, String> accounts = new LinkedHashMap<>();
+                for (User user : users) {
+                    Map<String, Object> existing;
+                    try (PreparedStatement query = connection.prepareStatement("SELECT * FROM users WHERE username = ? COLLATE NOCASE LIMIT 1")) {
+                        query.setString(1, user.getUsername());
+                        try (ResultSet result = query.executeQuery()) {
+                            existing = result.next() ? resultSetToMap(result) : null;
+                        }
+                    }
+                    if (existing == null) {
+                        insertSeedRow(connection, "users", "username, full_name, password_hash, role, residence_hall, bio, preferred_meetup, created_at, average_rating, rating_count",
+                                user.getUsername(), user.getFullName(), user.getPasswordHash(), user.getRole().name(),
+                                user.getResidenceHall(), user.getBio(), user.getPreferredMeetup(), user.getCreatedAt().toString(),
+                                user.getAverageRating(), user.getRatingCount());
+                        accounts.put(user.getUsername(), user.getUsername());
+                    } else if (user.getRole().name().equals(existing.get("role")) && existing.get("deleted_at") == null
+                            && ((Number) existing.get("active")).intValue() == 1) {
+                        accounts.put(user.getUsername(), (String) existing.get("username"));
+                    }
+                }
+                Map<String, Integer> listingIds = new LinkedHashMap<>();
+                for (Listing listing : listings) {
+                    String seller = accounts.get(listing.getSellerUsername());
+                    if (seller == null) continue;
+                    Integer id = seedId(connection, "SELECT listing_id FROM listings WHERE item_name = ? AND COALESCE(NULLIF(seller, ''), seller_username) = ? COLLATE NOCASE AND listing_type = ? LIMIT 1",
+                            listing.getTitle(), seller, listing.getType().name());
+                    if (id == null) {
+                        id = insertSeedRow(connection, "listings", "item_name, listing_type, category, item_condition, listing_status, price, lending_days, seller, seller_username, description, meetup_location, submitted_at, posted_date, availability_status, approved",
+                                listing.getTitle(), listing.getType().name(), listing.getCategory(), listing.getCondition(),
+                                listing.getStatus().name(), listing.getPrice(), listing.getLendingDays(), seller, seller,
+                                listing.getDescription(), listing.getMeetupLocation(), listing.getSubmittedAt().toString(),
+                                listing.getPostedAt() == null ? null : listing.getPostedAt().toString(), listing.getAvailabilityStatus(),
+                                listing.getStatus() == ListingStatus.PENDING_REVIEW ? -1 : 1);
+                    }
+                    listingIds.put(listing.getId(), id);
+                }
+                java.util.Set<String> offerRecipients = new java.util.HashSet<>();
+                for (Deal deal : deals) {
+                    Integer id = listingIds.get(deal.getListingId());
+                    String buyer = accounts.get(deal.getBuyerUsername());
+                    if (id == null || buyer == null || seedId(connection,
+                            "SELECT 1 FROM listings WHERE listing_id = ? AND listing_status = 'LIVE' AND availability_status = 'Available'", id) == null) continue;
+                    if (seedId(connection, "SELECT request_id FROM listing_requests WHERE buyer_username = ? COLLATE NOCASE AND listing_id = ? AND request_type = 'OFFER' LIMIT 1", buyer, id) == null) {
+                        insertSeedRow(connection, "listing_requests", "buyer_username, listing_id, request_type, offer_price, status, created_at, updated_at",
+                                buyer, id, "OFFER", deal.getOfferPrice(), deal.getStatus().toUpperCase(java.util.Locale.ROOT),
+                                deal.getCreatedAt().toString(), deal.getCreatedAt().toString());
+                    }
+                    if (seedId(connection, "SELECT 1 FROM listing_requests WHERE buyer_username = ? COLLATE NOCASE AND listing_id = ? AND request_type = 'OFFER' AND status = 'ACCEPTED' AND offer_price = ?",
+                            buyer, id, deal.getOfferPrice()) != null) {
+                        offerRecipients.add(buyer);
+                        String seller = accounts.get(deal.getSellerUsername());
+                        if (seller != null) offerRecipients.add(seller);
+                    }
+                }
+                for (Review review : reviews) {
+                    String buyer = accounts.get(review.getBuyerUsername());
+                    Listing reviewed = listings.stream().filter(listing -> listing.getTitle().equals(review.getListingTitle())
+                            && listing.getSellerUsername().equals(review.getSellerUsername())).findFirst().orElse(null);
+                    Integer id = reviewed == null ? null : listingIds.get(reviewed.getId());
+                    if (id == null || buyer == null
+                            || seedId(connection, "SELECT 1 FROM listings WHERE listing_id = ? AND listing_status = 'SOLD'", id) == null) continue;
+                    if (seedId(connection, "SELECT 1 FROM reviews WHERE buyer_username = ? COLLATE NOCASE AND listing_id = ?", buyer, id) == null) {
+                        insertSeedRow(connection, "reviews", "buyer_username, listing_id, rating, text, created_at",
+                                buyer, id, review.getRating(), review.getComment(), review.getCreatedAt().toString());
+                    }
+                }
+                java.util.Set<String> pendingRecipients = new java.util.HashSet<>();
+                for (Listing listing : listings) {
+                    Integer id = listingIds.get(listing.getId());
+                    if (listing.getStatus() != ListingStatus.PENDING_REVIEW || id == null
+                            || seedId(connection, "SELECT 1 FROM listings WHERE listing_id = ? AND listing_status = 'PENDING_REVIEW'", id) == null) continue;
+                    pendingRecipients.add(accounts.get(listing.getSellerUsername()));
+                    for (User user : users) {
+                        if (user.getRole() == UserRole.ADMIN && accounts.containsKey(user.getUsername())) {
+                            pendingRecipients.add(accounts.get(user.getUsername()));
+                        }
+                    }
+                }
+                for (Notification notification : notifications) {
+                    String recipient = accounts.get(notification.getUsername());
+                    if (recipient == null) continue;
+                    if ("Offer".equals(notification.getCategory()) && !offerRecipients.contains(recipient)) continue;
+                    if ("System".equals(notification.getCategory()) && !pendingRecipients.contains(recipient)) continue;
+                    if (seedId(connection, "SELECT 1 FROM notifications WHERE username = ? AND title = ? AND message = ? AND category = ? LIMIT 1",
+                            recipient, notification.getTitle(), notification.getMessage(), notification.getCategory()) == null) {
+                        insertSeedRow(connection, "notifications", "username, title, message, category, timestamp",
+                                recipient, notification.getTitle(), notification.getMessage(), notification.getCategory(), notification.getTimestamp().toString());
+                    }
+                }
+                insertSeedRow(connection, "demo_data_seed", "dataset_key, seeded_at", datasetKey, LocalDateTime.now().toString());
+                connection.commit();
+            } catch (SQLException | RuntimeException e) {
+                connection.rollback();
+                throw e;
+            }
+        } catch (SQLException e) { throw new IllegalStateException("Could not seed demo data. No changes were saved.", e); }
+    }
+
+    private static Integer seedId(Connection connection, String sql, Object... parameters) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            for (int i = 0; i < parameters.length; i++) statement.setObject(i + 1, parameters[i]);
+            try (ResultSet result = statement.executeQuery()) { return result.next() ? result.getInt(1) : null; }
+        }
+    }
+
+    /** Identifiers are private, fixed seed definitions; every data value is bound. */
+    private static int insertSeedRow(Connection connection, String table, String columns, Object... values) throws SQLException {
+        String placeholders = String.join(", ", java.util.Collections.nCopies(values.length, "?"));
+        try (PreparedStatement statement = connection.prepareStatement("INSERT INTO " + table + " (" + columns
+                + ") VALUES (" + placeholders + ")", Statement.RETURN_GENERATED_KEYS)) {
+            for (int i = 0; i < values.length; i++) statement.setObject(i + 1, values[i]);
+            statement.executeUpdate();
+            try (ResultSet result = statement.getGeneratedKeys()) {
+                if (!result.next()) throw new SQLException("Seed record ID was not generated.");
+                return result.getInt(1);
+            }
+        }
     }
 
     /** Adds buyer deal, review, and report columns without rewriting seller or admin tables. */

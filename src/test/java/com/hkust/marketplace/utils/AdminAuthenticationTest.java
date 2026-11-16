@@ -48,7 +48,7 @@ public class AdminAuthenticationTest {
 
     @Test
     public void seededAdminCanLoginWithDocumentedPassword() {
-        DataService.seedUserIfMissing();
+        DataService.seedData();
 
         User admin = DataService.authenticate("admin", "admin123", UserRole.ADMIN);
 
@@ -118,7 +118,7 @@ public class AdminAuthenticationTest {
         createAccount("admin", UserRole.ADMIN);
         DatabaseManager.editData("users", "admin", "active", false);
 
-        DataService.seedUserIfMissing();
+        DataService.seedData();
         // Also exercise the guarded INSERT independently of the service precheck.
         DatabaseManager.createUserIfMissing("admin", "Replacement", passwordHash,
                 "ADMIN", null, null, null);
@@ -134,7 +134,7 @@ public class AdminAuthenticationTest {
     public void seedingDoesNotPromoteExistingCaseVariantAccount() {
         createAccount("ADMIN", UserRole.BUYER);
 
-        DataService.seedUserIfMissing();
+        DataService.seedData();
         DatabaseManager.createUserIfMissing("admin", "Replacement", passwordHash,
                 "ADMIN", null, null, null);
 
@@ -145,7 +145,7 @@ public class AdminAuthenticationTest {
 
     @Test
     public void allReadmeDemoAccountsAreSeededWithHashedPasswordsAndCorrectRoles() {
-        DataService.seedUserIfMissing();
+        DataService.seedData();
 
         assertEquals(5, DatabaseManager.fetchRows("users", java.util.Map.of()).size());
         for (String username : java.util.List.of("alice", "bob", "charlie", "diana")) {
@@ -162,10 +162,10 @@ public class AdminAuthenticationTest {
 
     @Test
     public void repeatedSeedingPreservesAllExistingRows() {
-        DataService.seedUserIfMissing();
+        DataService.seedData();
         var before = DatabaseManager.fetchRows("users", java.util.Map.of());
 
-        DataService.seedUserIfMissing();
+        DataService.seedData();
 
         assertEquals(before, DatabaseManager.fetchRows("users", java.util.Map.of()));
     }
@@ -176,7 +176,7 @@ public class AdminAuthenticationTest {
         createAccount("CHARLIE", UserRole.SELLER);
         DatabaseManager.editData("users", "CHARLIE", "active", false);
 
-        DataService.seedUserIfMissing();
+        DataService.seedData();
         DatabaseManager.createUserIfMissing("alice", "Replacement", "replacement-hash",
                 "ADMIN", null, null, null);
 
