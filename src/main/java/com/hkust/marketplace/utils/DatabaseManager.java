@@ -199,6 +199,8 @@ public class DatabaseManager {
         addColumnIfMissing("reviews", "created_at", "TEXT");
         addColumnIfMissing("reviews", "seller_reply", "TEXT");
         addColumnIfMissing("reviews", "hidden", "INTEGER NOT NULL DEFAULT 0");
+        addColumnIfMissing("notifications", "request_id", "INTEGER");
+        addColumnIfMissing("notifications", "listing_id", "INTEGER");
         runSql("""
                 CREATE TABLE IF NOT EXISTS listing_reports (
                     buyer_username TEXT NOT NULL,
@@ -1213,10 +1215,11 @@ public class DatabaseManager {
                     default -> "The seller countered your offer for " + itemName
                             + " at HK$" + counterPrice + ".";
                 };
-                insertNotification(connection, buyer, sellerUsername, title, message, "Offer");
+                insertNotification(connection, buyer, sellerUsername, title, message, "Offer", requestId, listingId);
                 if (dueAt != null) {
                     insertNotification(connection, buyer, sellerUsername, "Borrow due-date reminder",
-                            "Return " + itemName + " by " + dueAt.replace('T', ' ') + ".", "Reminder");
+                            "Return " + itemName + " by " + dueAt.replace('T', ' ') + ".", "Reminder",
+                            requestId, listingId);
                 }
 
                 if ("ACCEPT".equals(normalizedAction)) {
@@ -1230,7 +1233,7 @@ public class DatabaseManager {
                         updateOthers.executeUpdate();
                     }
                     try (PreparedStatement others = connection.prepareStatement("""
-                            SELECT buyer_username FROM listing_requests
+                            SELECT request_id, buyer_username FROM listing_requests
                             WHERE listing_id = ? AND request_id <> ? AND status = 'DECLINED'
                                 AND updated_at = ?
                             """)) {
@@ -1242,7 +1245,7 @@ public class DatabaseManager {
                                 insertNotification(connection, results.getString("buyer_username"), sellerUsername,
                                         "Listing no longer available",
                                         itemName + " is no longer available because another request was accepted.",
-                                        "Offer");
+                                        "Offer", results.getInt("request_id"), listingId);
                             }
                         }
                     }
@@ -1328,9 +1331,16 @@ public class DatabaseManager {
 
     private static void insertNotification(Connection connection, String username, String sender,
                                            String title, String message, String category) throws SQLException {
+        insertNotification(connection, username, sender, title, message, category, null, null);
+    }
+
+    private static void insertNotification(Connection connection, String username, String sender,
+                                           String title, String message, String category,
+                                           Integer requestId, Integer listingId) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("""
-                INSERT INTO notifications (username, sender, title, message, category, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO notifications
+                    (username, sender, title, message, category, timestamp, request_id, listing_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """)) {
             statement.setString(1, username);
             statement.setString(2, sender);
@@ -1338,6 +1348,10 @@ public class DatabaseManager {
             statement.setString(4, message);
             statement.setString(5, category);
             statement.setString(6, LocalDateTime.now().toString());
+            if (requestId == null) statement.setNull(7, Types.INTEGER);
+            else statement.setInt(7, requestId);
+            if (listingId == null) statement.setNull(8, Types.INTEGER);
+            else statement.setInt(8, listingId);
             statement.executeUpdate();
         }
     }
@@ -1395,9 +1409,16 @@ public class DatabaseManager {
 
     public static void createNotification(String username, String sender, String title,
                                           String message, String category) {
+        createNotification(username, sender, title, message, category, null, null);
+    }
+
+    public static void createNotification(String username, String sender, String title,
+                                          String message, String category,
+                                          Integer requestId, Integer listingId) {
         String sql = """
-        INSERT INTO notifications (username, sender, title, message, category, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO notifications
+            (username, sender, title, message, category, timestamp, request_id, listing_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """;
 
         try (Connection connection = connect();
@@ -1409,11 +1430,26 @@ public class DatabaseManager {
             stmt.setString(4, message);
             stmt.setString(5, category);
             stmt.setString(6, LocalDateTime.now().toString());
+            if (requestId == null) stmt.setNull(7, Types.INTEGER);
+            else stmt.setInt(7, requestId);
+            if (listingId == null) stmt.setNull(8, Types.INTEGER);
+            else stmt.setInt(8, listingId);
 
             stmt.executeUpdate();
         } catch (SQLException e) {
             throw new IllegalStateException("Could not create notification", e);
         }
+    }
+
+    /** Newest request this buyer has on the listing, if any. */
+    public static Integer latestBuyerRequestId(String buyerUsername, int listingId) {
+        List<Map<String, Object>> rows = fetchQuery("""
+                SELECT request_id FROM listing_requests
+                WHERE buyer_username = ? AND listing_id = ?
+                ORDER BY request_id DESC LIMIT 1
+                """, buyerUsername, listingId);
+        if (rows.isEmpty() || !(rows.get(0).get("request_id") instanceof Number requestId)) return null;
+        return requestId.intValue();
     }
 
     public static void deleteData(String tableName, String key) {
@@ -2113,8 +2149,10 @@ public class DatabaseManager {
                             "System");
                 }
                 if (automatic) {
+                    Integer listingId = request.get("listing_id") instanceof Number id ? id.intValue() : null;
                     insertNotification(connection, buyerUsername, seller, "Borrow period ended",
-                            itemName + " was automatically returned because the due time passed.", "Reminder");
+                            itemName + " was automatically returned because the due time passed.", "Reminder",
+                            requestId, listingId);
                 }
                 connection.commit();
             } catch (RuntimeException | SQLException e) {
@@ -2370,7 +2408,7 @@ public class DatabaseManager {
                             insertNotification(connection, result.getString("buyer_username"), "admin",
                                     "Listing removed",
                                     itemName + " was removed. This notice is only for your open offer. " + marker,
-                                    "Offer");
+                                    "Offer", result.getInt("request_id"), listingId);
                         }
                     }
                 }
@@ -2403,8 +2441,11 @@ public class DatabaseManager {
                     """, buyerUsername, "%" + marker).stream().findAny().isPresent();
             if (alreadySent) continue;
             String itemName = String.valueOf(row.get("item_name"));
+            Integer requestId = row.get("request_id") instanceof Number id ? id.intValue() : null;
+            Integer listingId = row.get("listing_id") instanceof Number id ? id.intValue() : null;
             createNotification(buyerUsername, "admin", "Listing removed",
-                    itemName + " was removed. This notice is only for your open offer. " + marker, "Offer");
+                    itemName + " was removed. This notice is only for your open offer. " + marker, "Offer",
+                    requestId, listingId);
         }
     }
 }

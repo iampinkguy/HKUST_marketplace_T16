@@ -202,15 +202,37 @@
 .table-row-cell:selected {
     -fx-background-color: #e8f0f8;
 }
-/* Deal History selection uses white text, so the highlight must stay dark enough to read. */
-.deal-history-table .table-row-cell:filled:selected,
-.deal-history-table:focused > .virtual-flow > .clipped-container > .sheet > .table-row-cell:filled:selected {
-    -fx-background: #003974;
-    -fx-background-color: #003974;
+
+.history-card {
+    -fx-padding: 14 16 14 18;
 }
-.deal-history-table .table-row-cell:filled:selected .table-cell,
-.deal-history-table:focused > .virtual-flow > .clipped-container > .sheet > .table-row-cell:filled:selected .table-cell {
-    -fx-text-fill: white;
+.history-bought {
+    -fx-border-color: #003974;
+    -fx-border-width: 0 0 0 5;
+}
+.history-borrowed {
+    -fx-border-color: #A68137;
+    -fx-border-width: 0 0 0 5;
+}
+.history-received {
+    -fx-border-color: #2e7d32;
+    -fx-border-width: 0 0 0 5;
+}
+.badge-bought {
+    -fx-background-color: #e8f0f8;
+    -fx-text-fill: #003974;
+}
+.badge-borrowed {
+    -fx-background-color: #f8f1e3;
+    -fx-text-fill: #8a6a24;
+}
+.badge-received {
+    -fx-background-color: #e8f5e9;
+    -fx-text-fill: #2e7d32;
+}
+.badge-returned {
+    -fx-background-color: #e0f2f1;
+    -fx-text-fill: #00695c;
 }
 
 /* ---------- Welcome / Auth screens ---------- */

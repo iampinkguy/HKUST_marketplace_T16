@@ -45,16 +45,20 @@
     }
   },
   "3": {
-    "messages": [
-      {
-        "timestamp": "2026-11-13T16:14:30.686029300",
-        "user": "alice",
-        "role": "buyer",
-        "content": "hi"
+    "conversations": {
+      "alice": {
+        "messages": [
+          {
+            "timestamp": "2026-11-16T12:07:22.201493800",
+            "user": "alice",
+            "role": "buyer",
+            "content": "[Formal claim] Item claimed."
+          }
+        ],
+        "seen_buyer": true,
+        "seen_seller": false
       }
-    ],
-    "seen_buyer": true,
-    "seen_seller": false
+    }
   },
   "6": {
     "messages": [
@@ -67,5 +71,75 @@
     ],
     "seen_buyer": true,
     "seen_seller": false
+  },
+  "2": {
+    "conversations": {
+      "alice": {
+        "messages": [
+          {
+            "timestamp": "2026-11-16T00:57:47.162562500",
+            "user": "alice",
+            "role": "buyer",
+            "content": "yo"
+          },
+          {
+            "timestamp": "2026-11-16T00:57:50.445001900",
+            "user": "alice",
+            "role": "buyer",
+            "content": "[Formal offer] Proposed price: HK$100"
+          },
+          {
+            "timestamp": "2026-11-16T00:57:55.444526900",
+            "user": "alice",
+            "role": "buyer",
+            "content": "cheap d la"
+          },
+          {
+            "timestamp": "2026-11-16T00:58:45.061696800",
+            "user": "charlie",
+            "role": "seller",
+            "content": "ai ho la"
+          },
+          {
+            "timestamp": "2026-11-16T00:59:40.431705200",
+            "user": "charlie",
+            "role": "seller",
+            "content": "decline you"
+          },
+          {
+            "timestamp": "2026-11-16T01:00:08.062244400",
+            "user": "alice",
+            "role": "buyer",
+            "content": "D:"
+          },
+          {
+            "timestamp": "2026-11-16T01:00:11.504770800",
+            "user": "alice",
+            "role": "buyer",
+            "content": "[Formal offer] Proposed price: HK$150"
+          },
+          {
+            "timestamp": "2026-11-16T01:00:18.683556100",
+            "user": "alice",
+            "role": "buyer",
+            "content": "150 homo"
+          },
+          {
+            "timestamp": "2026-11-16T01:01:19.535960800",
+            "user": "charlie",
+            "role": "seller",
+            "content": "D:"
+          },
+          {
+            "timestamp": "2026-11-16T01:01:56.589615800",
+            "user": "alice",
+            "role": "buyer",
+            "content": "thanksssss luv u"
+          }
+        ],
+        "seen_buyer": true,
+        "seen_seller": true
+      }
+    }
   }
 }
