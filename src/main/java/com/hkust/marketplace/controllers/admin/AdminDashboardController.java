@@ -30,6 +30,8 @@ public class AdminDashboardController {
     private Button currentActiveBtn;
     private String userActionMessage;
     private boolean includeDeletedUsers;
+    private String notificationCategory = "All";
+    private String notificationState = "All";
 
     @FXML
     public void initialize() {
@@ -845,40 +847,188 @@ public class AdminDashboardController {
 
     @FXML
     private void showNotifications() {
-        setActive(btnNotifications, "Admin Notifications");
+        setActive(btnNotifications, "Notification Board");
         contentPane.getChildren().clear();
         VBox root = new VBox(12);
         root.setPadding(new Insets(4));
-        List<Notification> notifs;
-        try {
-            User admin = SessionManager.getCurrentUser();
-            notifs = admin == null ? List.of() : DataService.getNotificationsFor(admin.getUsername());
-        } catch (IllegalStateException | SecurityException ex) {
-            root.getChildren().add(new Label("Could not load notifications: " + ex.getMessage()));
-            contentPane.getChildren().add(new ScrollPane(root));
-            return;
-        }
-        if (notifs.isEmpty()) {
-            root.getChildren().add(new Label("No notifications."));
-        } else {
-            for (Notification n : notifs) {
-                VBox item = new VBox(4);
-                item.getStyleClass().add("notif-item");
-                Label t = new Label(n.getTitle());
-                t.setStyle("-fx-font-weight: bold;");
-                Label m = new Label(n.getMessage());
-                m.setWrapText(true);
-                m.setStyle("-fx-text-fill: #5a5a7a;");
-                Label meta = new Label(n.getCategory() + " · " +
-                        n.getTimestamp().format(DateTimeFormatter.ofPattern("dd MMM HH:mm")));
-                meta.setStyle("-fx-text-fill: #9aa0b0; -fx-font-size: 11px;");
-                item.getChildren().addAll(t, m, meta);
-                root.getChildren().add(item);
-            }
-        }
-        ScrollPane scroll = new ScrollPane(root);
+        VBox list = new VBox(8);
+        list.setId("admin-notification-list");
+        ComboBox<String> categories = new ComboBox<>(FXCollections.observableArrayList(
+                "All", "Listing Review", "Listing Report", "Account Update", "Announcement", "System", "Offer", "Chat", "Reminder", "Rating", "Deal"));
+        categories.setId("admin-notification-category");
+        categories.setValue(notificationCategory);
+        categories.setAccessibleText("Notification category");
+        ComboBox<String> state = new ComboBox<>(FXCollections.observableArrayList("All", "Unread", "Read"));
+        state.setId("admin-notification-state");
+        state.setValue(notificationState);
+        state.setAccessibleText("Notification read status");
+        categories.valueProperty().addListener((obs, old, value) -> { notificationCategory = value; renderAdminNotifications(list); });
+        state.valueProperty().addListener((obs, old, value) -> { notificationState = value; renderAdminNotifications(list); });
+        Button clear = new Button("Clear filters");
+        clear.setId("admin-notification-clear");
+        clear.getStyleClass().add("btn-outline");
+        clear.setOnAction(event -> { categories.setValue("All"); state.setValue("All"); });
+        Button refresh = new Button("Refresh");
+        refresh.setId("admin-notification-refresh");
+        refresh.getStyleClass().add("btn-outline");
+        refresh.setOnAction(event -> renderAdminNotifications(list));
+        FlowPane filters = new FlowPane(10, 8, new Label("Category:"), categories, new Label("Status:"), state, clear, refresh);
+        filters.setAlignment(Pos.CENTER_LEFT);
+        renderAdminNotifications(list);
+        ScrollPane scroll = new ScrollPane(list);
         scroll.setFitToWidth(true);
-        contentPane.getChildren().add(scroll);
+        VBox.setVgrow(scroll, Priority.ALWAYS);
+        root.getChildren().addAll(filters, scroll);
+        contentPane.getChildren().add(root);
+    }
+
+    private void renderAdminNotifications(VBox list) {
+        list.getChildren().clear();
+        try {
+            List<Notification> all = DataService.getAdminNotifications();
+            List<Notification> notifications = all.stream()
+                    .filter(n -> "All".equals(notificationCategory) || notificationCategory.equalsIgnoreCase(n.getCategory()))
+                    .filter(n -> "All".equals(notificationState) || n.isRead() == "Read".equals(notificationState)).toList();
+            if (notifications.isEmpty()) list.getChildren().add(new Label(all.isEmpty()
+                    ? "No notifications." : "No notifications match these filters."));
+            for (Notification n : notifications) {
+                VBox item = new VBox(6);
+                item.setId("admin-notification-" + n.getId());
+                item.getStyleClass().add("notif-item");
+                if (!n.isRead()) item.setStyle("-fx-border-color: #003974; -fx-border-width: 0 0 0 3;");
+                Label title = new Label(n.getTitle());
+                title.setWrapText(true);
+                title.setStyle("-fx-font-weight: bold;");
+                Label message = new Label(n.getMessage());
+                message.setWrapText(true);
+                message.setStyle("-fx-text-fill: #5a5a7a;");
+                Label meta = new Label(n.getCategory() + " · " + (n.getTimestamp() == null ? "Time not recorded"
+                        : n.getTimestamp().format(DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm:ss", java.util.Locale.ENGLISH)))
+                        + " · " + (n.isRead() ? "Read" : "Unread"));
+                meta.setWrapText(true);
+                meta.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 11px;");
+                Button open = new Button(n.getListingId() != null ? "Open listing"
+                        : n.getTargetUsername() != null ? "View account update" : "View notification");
+                open.setId("open-admin-notification-" + n.getId());
+                open.getStyleClass().addAll("btn-outline", "btn-sm");
+                open.setOnAction(event -> openAdminNotification(n, list));
+                // Consume the button's mouse event so it does not also activate its card.
+                open.addEventHandler(javafx.scene.input.MouseEvent.MOUSE_CLICKED, javafx.scene.input.MouseEvent::consume);
+                item.setCursor(javafx.scene.Cursor.HAND);
+                item.setFocusTraversable(true);
+                item.setAccessibleText(n.getTitle() + ". " + n.getCategory() + ". " + (n.isRead() ? "Read" : "Unread"));
+                item.setOnKeyPressed(event -> {
+                    if (event.getTarget() == item && (event.getCode() == javafx.scene.input.KeyCode.ENTER
+                            || event.getCode() == javafx.scene.input.KeyCode.SPACE)) {
+                        event.consume();
+                        openAdminNotification(n, list);
+                    }
+                });
+                item.setOnMouseClicked(event -> {
+                    if (event.getButton() == javafx.scene.input.MouseButton.PRIMARY) openAdminNotification(n, list);
+                });
+                item.getChildren().addAll(title, message, meta, open);
+                list.getChildren().add(item);
+            }
+        } catch (IllegalStateException | SecurityException ex) {
+            Label error = new Label("Could not load notifications: " + ex.getMessage());
+            error.setWrapText(true);
+            error.setStyle("-fx-text-fill: #c62828;");
+            list.getChildren().add(error);
+        }
+    }
+
+    private void openAdminNotification(Notification notification, VBox list) {
+        try {
+            String id = notification.getId();
+            notification = DataService.getAdminNotifications().stream().filter(n -> id.equals(n.getId())).findFirst()
+                    .orElseThrow(() -> new IllegalStateException("Notification is no longer available. Refresh the board."));
+            if (notification.getListingId() != null) {
+                Listing listing = DataService.getListingForAdmin(notification.getListingId().toString());
+                if (listing == null) throw new IllegalStateException("This listing no longer exists. Refresh the notification board.");
+                DataService.markAdminNotificationRead(notification.getId());
+                if ("Listing Report".equals(notification.getCategory()) || listing.getStatus() != ListingStatus.PENDING_REVIEW) {
+                    renderAdminNotifications(list);
+                    showNotificationListing(notification, listing);
+                } else {
+                    showReview();
+                    showListingDetails(listing);
+                }
+            } else if (notification.getTargetUsername() != null) {
+                String username = notification.getTargetUsername();
+                if (username.equalsIgnoreCase(SessionManager.getCurrentUser().getUsername())) {
+                    DataService.markAdminNotificationRead(notification.getId());
+                    showProfile();
+                } else {
+                    AdminUserService.Account account = AdminUserService.getAllUsers(true).stream()
+                            .filter(user -> username.equalsIgnoreCase(user.username())).findFirst().orElse(null);
+                    DataService.markAdminNotificationRead(notification.getId());
+                    if (account != null) {
+                        includeDeletedUsers = account.deletedAt() != null;
+                        showUsers();
+                        viewManagedUser(account);
+                    } else {
+                        renderAdminNotifications(list);
+                        showNotificationMessage(notification);
+                    }
+                }
+            } else {
+                DataService.markAdminNotificationRead(notification.getId());
+                renderAdminNotifications(list);
+                showNotificationMessage(notification);
+            }
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+            if (ex instanceof SecurityException) list.getChildren().clear();
+            list.getChildren().removeIf(node -> "admin-notification-error".equals(node.getId()));
+            Label error = new Label("Could not open notification: " + ex.getMessage());
+            error.setId("admin-notification-error");
+            error.setWrapText(true);
+            error.setStyle("-fx-text-fill: #c62828;");
+            list.getChildren().add(0, error);
+        }
+    }
+
+    private void showNotificationMessage(Notification notification) {
+        Dialog<Void> details = new Dialog<>();
+        details.setTitle("Notification");
+        details.setHeaderText(notification.getTitle());
+        details.initOwner(contentPane.getScene().getWindow());
+        Label message = new Label(notification.getMessage());
+        message.setWrapText(true);
+        Label meta = new Label(notification.getCategory() + " · " + (notification.getTimestamp() == null
+                ? "Time not recorded" : notification.getTimestamp().format(
+                DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm:ss", java.util.Locale.ENGLISH))));
+        VBox body = new VBox(12, meta, message);
+        body.setPadding(new Insets(16));
+        ScrollPane scroll = new ScrollPane(body);
+        scroll.setFitToWidth(true);
+        scroll.setPrefViewportWidth(580);
+        scroll.setPrefViewportHeight(300);
+        details.getDialogPane().setContent(scroll);
+        details.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+        details.setResizable(true);
+        details.show();
+    }
+
+    private void showNotificationListing(Notification notification, Listing listing) {
+        Dialog<Void> details = new Dialog<>();
+        details.setTitle("Listing Report".equals(notification.getCategory()) ? "Reported Listing" : "Listing Details");
+        details.setHeaderText(listing.getTitle() + " (#" + listing.getId() + ")");
+        details.initOwner(contentPane.getScene().getWindow());
+        Label context = new Label(notification.getMessage());
+        context.setWrapText(true);
+        Label fields = new Label(listingDetailsText(listing));
+        fields.setWrapText(true);
+        VBox body = new VBox(12, context, fields, createPhotoGallery(listing.getPhotoPaths(), false));
+        body.setPadding(new Insets(16));
+        ScrollPane scroll = new ScrollPane(body);
+        scroll.setFitToWidth(true);
+        scroll.setPrefViewportWidth(720);
+        scroll.setPrefViewportHeight(520);
+        details.getDialogPane().setContent(scroll);
+        details.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+        details.setResizable(true);
+        details.show();
     }
 
     @FXML

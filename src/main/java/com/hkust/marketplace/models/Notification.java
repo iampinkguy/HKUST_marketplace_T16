@@ -12,6 +12,7 @@ public class Notification {
     private boolean read;
     private Integer requestId;
     private Integer listingId;
+    private String targetUsername;
 
     public Notification() {
         this.timestamp = LocalDateTime.now();
@@ -53,4 +54,7 @@ public class Notification {
 
     public Integer getListingId() { return listingId; }
     public void setListingId(Integer listingId) { this.listingId = listingId; }
+
+    public String getTargetUsername() { return targetUsername; }
+    public void setTargetUsername(String targetUsername) { this.targetUsername = targetUsername; }
 }

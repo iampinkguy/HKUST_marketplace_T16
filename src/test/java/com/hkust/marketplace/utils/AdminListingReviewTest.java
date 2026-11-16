@@ -89,7 +89,7 @@ public class AdminListingReviewTest {
         assertNull(listing(id).get("reviewed_by"));
         assertNull(listing(id).get("rejection_reason"));
         assertNull(listing(id).get("posted_date"));
-        assertTrue(notifications().isEmpty());
+        assertTrue(notifications().stream().noneMatch(n -> List.of("Listing Approved", "Listing Rejected").contains(n.get("title"))));
         assertTrue(DatabaseManager.fetchRows("feedbacks", Map.of()).isEmpty());
     }
 
@@ -330,7 +330,9 @@ public class AdminListingReviewTest {
         assertNull(upgraded.get("seller_username"));
         assertNull(upgraded.get("reviewed_at"));
         assertEquals(1, DataService.getPendingListings().size());
-        assertTrue(notifications().isEmpty());
+        assertEquals(1, notifications().size());
+        assertEquals("Listing Review", notifications().get(0).get("category"));
+        assertEquals(id, ((Number) notifications().get(0).get("listing_id")).intValue());
         assertEquals(id + 1, createListing());
     }
 
