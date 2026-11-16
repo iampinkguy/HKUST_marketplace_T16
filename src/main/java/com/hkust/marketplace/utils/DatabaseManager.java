@@ -191,6 +191,15 @@ public class DatabaseManager {
         migrateBuyerDealColumns();
         migrateAdminNotificationSchema();
         runSql("""
+                CREATE TABLE IF NOT EXISTS listing_takedowns (
+                    takedown_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    listing_id INTEGER NOT NULL REFERENCES listings(listing_id),
+                    admin_username TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    occurred_at TEXT NOT NULL
+                )
+                """);
+        runSql("""
                 CREATE TABLE IF NOT EXISTS demo_data_seed (
                     dataset_key TEXT PRIMARY KEY, seeded_at TEXT NOT NULL
                 )
@@ -759,6 +768,24 @@ public class DatabaseManager {
 
     /** Saves a seller submission, its photos, and admin notifications as one database operation. */
     public static String submitListing(Listing listing, String sellerUsername, List<Path> photos) {
+        return submitListing(listing, sellerUsername, photos, null);
+    }
+
+    public static void addAdminListing(String admin, String seller, Listing listing, List<Path> photos) {
+        submitListing(listing, seller, photos, admin);
+    }
+
+    private static void checkListingAdmin(Connection connection, String admin) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT 1 FROM users WHERE username = ? AND role = 'ADMIN' AND active = 1")) {
+            statement.setString(1, admin);
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next()) throw new SecurityException("An active admin account is required.");
+            }
+        }
+    }
+
+    private static String submitListing(Listing listing, String sellerUsername, List<Path> photos, String admin) {
         if (listing == null || sellerUsername == null || sellerUsername.isBlank() || photos == null) {
             throw new IllegalArgumentException("Listing, seller, and photos are required.");
         }
@@ -770,6 +797,7 @@ public class DatabaseManager {
         try (Connection connection = connect()) {
             connection.setAutoCommit(false);
             try {
+                if (admin != null) checkListingAdmin(connection, admin);
                 String canonicalUsername;
                 String sellerName;
                 try (PreparedStatement statement = connection.prepareStatement("""
@@ -843,7 +871,20 @@ public class DatabaseManager {
                     }
                 }
 
-                try (PreparedStatement statement = connection.prepareStatement("""
+                if (admin != null) {
+                    try (PreparedStatement statement = connection.prepareStatement("""
+                            UPDATE listings SET listing_status = 'LIVE', approved = 1, posted_date = ?,
+                                reviewed_at = ?, reviewed_by = ? WHERE listing_id = ?
+                            """)) {
+                        statement.setString(1, submittedAt.toString());
+                        statement.setString(2, submittedAt.toString());
+                        statement.setString(3, admin);
+                        statement.setInt(4, listingId);
+                        statement.executeUpdate();
+                    }
+                    insertNotification(connection, canonicalUsername, admin, "Listing Created",
+                            admin + " published '" + listing.getTitle() + "' on your behalf.", "System", null, listingId);
+                } else try (PreparedStatement statement = connection.prepareStatement("""
                         INSERT INTO notifications (username, sender, title, message, category, timestamp, listing_id)
                         SELECT username, ?, 'New Listing Submitted', ?, 'Listing Review', ?, ?
                         FROM users WHERE role = 'ADMIN' AND active = 1
@@ -861,7 +902,10 @@ public class DatabaseManager {
                 listing.setId(Integer.toString(listingId));
                 listing.setSellerUsername(canonicalUsername);
                 listing.setSellerFullName(sellerName);
-                listing.setStatus(ListingStatus.PENDING_REVIEW);
+                listing.setStatus(admin == null ? ListingStatus.PENDING_REVIEW : ListingStatus.LIVE);
+                listing.setPostedAt(admin == null ? null : submittedAt);
+                listing.setReviewVersion(admin == null ? 0 : 1);
+                listing.setIsApproved(admin != null);
                 listing.setSubmittedAt(submittedAt);
                 listing.setPhotoPaths(java.util.Arrays.stream(photoNames)
                         .filter(name -> name != null).toList());
@@ -890,6 +934,17 @@ public class DatabaseManager {
     /** Updates a seller-owned listing and sends it back through admin review atomically. */
     public static void updateSellerListing(Listing listing, String sellerUsername,
                                            List<Path> photos, boolean replacePhotos) {
+        updateListing(listing, sellerUsername, photos, replacePhotos, null);
+    }
+
+    public static void updateAdminListing(String admin, Listing listing, List<Path> photos, boolean replacePhotos) {
+        Map<String, Object> current = fetchRow("listings", "listing_id", parseListingId(listing.getId()));
+        if (current == null) throw new IllegalStateException("Listing no longer exists. Refresh and try again.");
+        updateListing(listing, current.get("seller_username").toString(), photos, replacePhotos, admin);
+    }
+
+    private static void updateListing(Listing listing, String sellerUsername,
+                                      List<Path> photos, boolean replacePhotos, String admin) {
         if (listing == null || sellerUsername == null || sellerUsername.isBlank() || photos == null) {
             throw new IllegalArgumentException("Listing, seller, and photos are required.");
         }
@@ -903,6 +958,7 @@ public class DatabaseManager {
         try (Connection connection = connect()) {
             connection.setAutoCommit(false);
             try {
+                if (admin != null) checkListingAdmin(connection, admin);
                 String canonicalUsername;
                 String sellerName;
                 String[] photoNames = new String[6];
@@ -911,13 +967,14 @@ public class DatabaseManager {
                             u.username AS account_username, u.full_name
                         FROM listings l
                         JOIN users u ON u.username = l.seller_username COLLATE NOCASE
-                            AND u.role = 'SELLER' AND u.active = 1
+                            AND u.role = 'SELLER' AND (u.active = 1 OR ? = 1)
                         WHERE l.listing_id = ? AND l.seller_username = ? COLLATE NOCASE
                             AND l.review_version = ?
                         """)) {
-                    statement.setInt(1, listingId);
-                    statement.setString(2, sellerUsername);
-                    statement.setLong(3, listing.getReviewVersion());
+                    statement.setInt(1, admin == null ? 0 : 1);
+                    statement.setInt(2, listingId);
+                    statement.setString(3, sellerUsername);
+                    statement.setLong(4, listing.getReviewVersion());
                     try (ResultSet result = statement.executeQuery()) {
                         if (!result.next()) {
                             throw new IllegalStateException("This listing is no longer available or has changed. Refresh your listings and try again.");
@@ -958,12 +1015,13 @@ public class DatabaseManager {
                 LocalDateTime submittedAt = LocalDateTime.now();
                 String updateSql = """
                         UPDATE listings SET item_name = ?, listing_type = ?, category = ?, item_condition = ?,
-                            listing_status = 'PENDING_REVIEW', price = ?, lending_days = ?, description = ?,
+                            %s price = ?, lending_days = ?, description = ?,
                             numPhotos = ?, photo1 = ?, photo2 = ?, photo3 = ?, photo4 = ?, photo5 = ?, photo6 = ?,
-                            meetup_location = ?, posted_date = NULL, submitted_at = ?, availability_status = 'Available',
-                            approved = -1, reviewed_at = NULL, reviewed_by = NULL, rejection_reason = NULL
+                            meetup_location = ?, %s
                         WHERE listing_id = ? AND seller_username = ? COLLATE NOCASE AND review_version = ?
-                        """;
+                        """.formatted(admin == null ? "listing_status = 'PENDING_REVIEW'," : "",
+                        admin == null ? "posted_date = NULL, submitted_at = ?, availability_status = 'Available', approved = -1, reviewed_at = NULL, reviewed_by = NULL, rejection_reason = NULL"
+                                : "submitted_at = COALESCE(submitted_at, ?)");
                 try (PreparedStatement statement = connection.prepareStatement(updateSql)) {
                     statement.setString(1, listing.getTitle());
                     statement.setString(2, listing.getType().name());
@@ -984,7 +1042,10 @@ public class DatabaseManager {
                     }
                 }
 
-                try (PreparedStatement statement = connection.prepareStatement("""
+                if (admin != null) {
+                    insertNotification(connection, canonicalUsername, admin, "Listing Updated",
+                            admin + " updated '" + listing.getTitle() + "'. Its status is unchanged.", "System", null, listingId);
+                } else try (PreparedStatement statement = connection.prepareStatement("""
                         INSERT INTO notifications (username, sender, title, message, category, timestamp, listing_id)
                         SELECT username, ?, 'Listing Updated - Review Required', ?, 'Listing Review', ?, ?
                         FROM users WHERE role = 'ADMIN' AND active = 1
@@ -1001,8 +1062,10 @@ public class DatabaseManager {
                 connection.commit();
                 listing.setSellerUsername(canonicalUsername);
                 listing.setSellerFullName(sellerName);
-                listing.setStatus(ListingStatus.PENDING_REVIEW);
-                listing.setSubmittedAt(submittedAt);
+                if (admin == null) {
+                    listing.setStatus(ListingStatus.PENDING_REVIEW);
+                    listing.setSubmittedAt(submittedAt);
+                }
                 if (replacePhotos) {
                     listing.setPhotoPaths(java.util.Arrays.stream(photoNames)
                             .filter(name -> name != null).toList());
@@ -2763,7 +2826,70 @@ public class DatabaseManager {
         }
     }
 
-    /** Removes a listing from the marketplace and tells buyers who still have an open offer. */
+    /** Retains listing and deal/chat history; decision, pending requests and notices commit together. */
+    public static void takeDownListing(int listingId, String admin, String reason, long expectedVersion) {
+        if (reason == null || reason.isBlank()) throw new IllegalArgumentException("A takedown reason is required.");
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            try {
+                checkListingAdmin(connection, admin);
+                String title;
+                String seller;
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        SELECT item_name, seller_username FROM listings
+                        WHERE listing_id = ? AND listing_status = 'LIVE' AND review_version = ?
+                        """)) {
+                    statement.setInt(1, listingId); statement.setLong(2, expectedVersion);
+                    try (ResultSet r = statement.executeQuery()) {
+                        if (!r.next()) throw new IllegalStateException("Listing is no longer live or has changed. Refresh and try again.");
+                        title = r.getString("item_name"); seller = r.getString("seller_username");
+                    }
+                }
+                String now = LocalDateTime.now().toString();
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        UPDATE listings SET listing_status = 'REMOVED', availability_status = 'Unavailable'
+                        WHERE listing_id = ? AND listing_status = 'LIVE' AND review_version = ?
+                        """)) {
+                    statement.setInt(1, listingId); statement.setLong(2, expectedVersion);
+                    if (statement.executeUpdate() != 1) throw new IllegalStateException("Listing has changed. Refresh and try again.");
+                }
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        INSERT INTO listing_takedowns (listing_id, admin_username, reason, occurred_at) VALUES (?, ?, ?, ?)
+                        """)) {
+                    statement.setInt(1, listingId); statement.setString(2, admin);
+                    statement.setString(3, reason.trim()); statement.setString(4, now); statement.executeUpdate();
+                }
+                String message = "'" + title + "' was taken down by " + admin + ". Reason: " + reason.trim();
+                insertNotification(connection, seller, admin, "Listing Taken Down", message, "System", null, listingId);
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        SELECT request_id, buyer_username FROM listing_requests
+                        WHERE listing_id = ? AND status IN ('PENDING', 'COUNTERED')
+                            AND completed_at IS NULL AND returned_at IS NULL
+                        """)) {
+                    statement.setInt(1, listingId);
+                    try (ResultSet r = statement.executeQuery()) {
+                        while (r.next()) insertNotification(connection, r.getString("buyer_username"), admin,
+                                "Listing Taken Down", message + " Your pending request was declined.", "Offer",
+                                r.getInt("request_id"), listingId);
+                    }
+                }
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        UPDATE listing_requests SET status = 'DECLINED', updated_at = ?
+                        WHERE listing_id = ? AND status IN ('PENDING', 'COUNTERED')
+                            AND completed_at IS NULL AND returned_at IS NULL
+                        """)) {
+                    statement.setString(1, now); statement.setInt(2, listingId); statement.executeUpdate();
+                }
+                connection.commit();
+            } catch (SQLException | RuntimeException e) {
+                connection.rollback();
+                if (e instanceof RuntimeException runtime) throw runtime;
+                throw new IllegalStateException("Could not take down listing.", e);
+            }
+        } catch (SQLException e) { throw new IllegalStateException("Could not take down listing.", e); }
+    }
+
+    /** Legacy removal API; new admin decisions use takeDownListing with a reason and version. */
     public static void removeListing(int listingId) {
         try (Connection connection = connect()) {
             connection.setAutoCommit(false);

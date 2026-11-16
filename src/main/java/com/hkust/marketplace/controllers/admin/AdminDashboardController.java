@@ -32,6 +32,7 @@ public class AdminDashboardController {
     private boolean includeDeletedUsers;
     private String notificationCategory = "All";
     private String notificationState = "All";
+    private String listingActionMessage;
 
     @FXML
     public void initialize() {
@@ -295,59 +296,256 @@ public class AdminDashboardController {
 
         Button addBtn = new Button("+ Add Listing (on behalf of seller)");
         addBtn.getStyleClass().add("btn-primary");
-        addBtn.setOnAction(e -> new Alert(Alert.AlertType.INFORMATION,
-                "Admin can create a listing on behalf of a seller here.\nSame form fields as Seller Create Listing.\n(UI placeholder)").showAndWait());
+        addBtn.setId("admin-listing-add");
+        addBtn.setOnAction(e -> showManagedListingForm(null));
         root.getChildren().add(addBtn);
-
-        List<Listing> listings;
-        try {
-            listings = DataService.getAllListings();
-        } catch (IllegalStateException | SecurityException ex) {
-            root.getChildren().add(new Label("Could not load listings: " + ex.getMessage()));
-            contentPane.getChildren().add(new ScrollPane(root));
-            return;
+        TextField search = new TextField();
+        search.setId("admin-listings-search");
+        search.setPromptText("Search title, seller or listing ID");
+        search.setPrefColumnCount(24);
+        ComboBox<String> status = new ComboBox<>();
+        status.setId("admin-listings-status");
+        status.getItems().add("All statuses");
+        for (ListingStatus value : ListingStatus.values()) status.getItems().add(value.name());
+        status.setValue("All statuses");
+        status.setAccessibleText("Listing status");
+        Button refresh = new Button("Refresh");
+        refresh.setId("admin-listings-refresh");
+        FlowPane filters = new FlowPane(8, 8, search, status, refresh);
+        VBox list = new VBox(10);
+        list.setId("admin-listings-list");
+        if (listingActionMessage != null) {
+            Label success = new Label(listingActionMessage);
+            success.setStyle("-fx-text-fill: #2e7d32;"); success.setWrapText(true);
+            root.getChildren().add(success); listingActionMessage = null;
         }
-        if (listings.isEmpty()) root.getChildren().add(new Label("No listings stored."));
-        for (Listing l : listings) {
-            HBox row = new HBox(12);
-            row.getStyleClass().add("card");
-            row.setAlignment(Pos.CENTER_LEFT);
-            row.setPadding(new Insets(12));
-
-            VBox info = new VBox(3);
-            HBox.setHgrow(info, Priority.ALWAYS);
-            Label t = new Label(l.getTitle());
-            t.setStyle("-fx-font-weight: bold;");
-            Label m = new Label(l.getSellerFullName() + " · " + l.getTypeDisplay() + " · " + l.getStatus());
-            m.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 12px;");
-            info.getChildren().addAll(t, m);
-
-            Button edit = new Button("Edit");
-            edit.getStyleClass().addAll("btn-outline", "btn-sm");
-            edit.setOnAction(e -> new Alert(Alert.AlertType.INFORMATION, "Edit listing dialog (demo).").showAndWait());
-
-            Button remove = new Button("Remove");
-            remove.getStyleClass().addAll("btn-danger", "btn-sm");
-            remove.setOnAction(e -> {
-                Alert conf = new Alert(Alert.AlertType.CONFIRMATION, "Permanently remove this listing?");
-                conf.showAndWait().ifPresent(r -> {
-                    if (r == ButtonType.OK) {
-                        try {
-                            DataService.removeListing(l.getId());
-                            showAllListings();
-                        } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
-                            new Alert(Alert.AlertType.ERROR, ex.getMessage()).showAndWait();
-                        }
-                    }
-                });
-            });
-
-            row.getChildren().addAll(info, edit, remove);
-            root.getChildren().add(row);
-        }
+        Runnable render = () -> renderManagedListings(list, search.getText(), status.getValue());
+        search.textProperty().addListener((o, old, value) -> render.run());
+        status.setOnAction(e -> render.run()); refresh.setOnAction(e -> render.run());
+        root.getChildren().addAll(filters, list);
+        render.run();
         ScrollPane scroll = new ScrollPane(root);
         scroll.setFitToWidth(true);
         contentPane.getChildren().add(scroll);
+    }
+
+    private void renderManagedListings(VBox list, String query, String status) {
+        list.getChildren().clear();
+        try {
+            String term = query == null ? "" : query.trim().toLowerCase(java.util.Locale.ROOT);
+            List<Listing> listings = DataService.getAllListings().stream()
+                    .filter(l -> "All statuses".equals(status) || l.getStatus().name().equals(status))
+                    .filter(l -> (l.getId() + " " + l.getTitle() + " " + l.getSellerUsername() + " " + l.getSellerFullName())
+                            .toLowerCase(java.util.Locale.ROOT).contains(term)).toList();
+            if (listings.isEmpty()) list.getChildren().add(new Label("No listings match these filters."));
+            for (Listing l : listings) {
+                VBox info = new VBox(4, new Label(l.getTitle() + " (#" + l.getId() + ")"),
+                        new Label("@" + l.getSellerUsername() + " · " + l.getSellerFullName() + " · " + l.getTypeDisplay() + " · " + l.getStatus()));
+                Button edit = new Button("Edit"); edit.setId("admin-listing-edit-" + l.getId());
+                edit.getStyleClass().add("btn-outline");
+                edit.setOnAction(e -> showManagedListingForm(l));
+                Button remove = new Button("Take down"); remove.setId("admin-listing-takedown-" + l.getId());
+                remove.getStyleClass().add("btn-danger"); remove.setDisable(l.getStatus() != ListingStatus.LIVE);
+                remove.setOnAction(e -> showListingTakedown(l));
+                VBox card = new VBox(10, info, new HBox(8, edit, remove));
+                for (DataService.ListingManagementEntry entry : DataService.getListingManagementHistory(l.getId())) {
+                    Label history = new Label("Taken down by @" + entry.adminUsername() + " · "
+                            + entry.occurredAt().format(DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm:ss", java.util.Locale.ENGLISH))
+                            + "\nReason: " + entry.reason());
+                    history.setWrapText(true); card.getChildren().add(history);
+                }
+                card.getStyleClass().add("card"); card.setPadding(new Insets(12));
+                card.setId("admin-listing-" + l.getId());
+                list.getChildren().add(card);
+            }
+        } catch (IllegalStateException | SecurityException ex) {
+            list.getChildren().add(new Label("Could not load listings: " + ex.getMessage()));
+        }
+    }
+
+    private void showManagedListingForm(Listing snapshot) {
+        Listing existing;
+        try {
+            existing = snapshot == null ? null : DataService.getListingForAdmin(snapshot.getId());
+            if (snapshot != null && (existing == null || existing.getReviewVersion() != snapshot.getReviewVersion())) {
+                throw new IllegalStateException("Listing has changed. Refresh and try again.");
+            }
+            // Recheck authorization even when opening an empty form.
+            List<User> sellers = DataService.getAllUsers();
+            Dialog<Void> dialog = new Dialog<>();
+            boolean editing = existing != null;
+            dialog.setTitle(editing ? "Edit Listing" : "Add Listing");
+            dialog.initOwner(contentPane.getScene().getWindow()); dialog.setResizable(true);
+            dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
+            Button save = (Button) dialog.getDialogPane().lookupButton(ButtonType.OK);
+            save.setText(editing ? "Save Changes" : "Publish Listing");
+            ComboBox<String> type = new ComboBox<>(FXCollections.observableArrayList("Sell", "Lend", "Give Away"));
+            type.setId("admin-listing-type"); type.setPromptText("Choose listing type first *");
+            ComboBox<String> seller = new ComboBox<>(); seller.setId("admin-listing-seller");
+            sellers.stream().filter(u -> u.getRole() == UserRole.SELLER && u.isActive()).forEach(u -> seller.getItems().add(u.getUsername()));
+            seller.setPromptText("Seller username *");
+            TextField name = new TextField(); name.setId("admin-listing-name");
+            ComboBox<String> category = new ComboBox<>(FXCollections.observableArrayList(DataService.CATEGORIES)); category.setId("admin-listing-category");
+            ComboBox<String> condition = new ComboBox<>(FXCollections.observableArrayList(DataService.CONDITIONS)); condition.setId("admin-listing-condition");
+            TextArea description = new TextArea(); description.setId("admin-listing-description"); description.setPrefRowCount(3); description.setWrapText(true);
+            TextField price = new TextField(); price.setId("admin-listing-price");
+            TextField days = new TextField(); days.setId("admin-listing-days");
+            VBox priceGroup = new VBox(4, new Label("Price (HK$, Sell only) *"), price);
+            VBox daysGroup = new VBox(4, new Label("Lending duration (days, Lend only) *"), days);
+            ComboBox<String> meetup = new ComboBox<>(FXCollections.observableArrayList(DataService.HKUST_LOCATIONS)); meetup.setId("admin-listing-meetup");
+            java.util.ArrayList<Path> photos = new java.util.ArrayList<>();
+            VBox photoList = new VBox(6);
+            Label photoCount = new Label("Photos: 0 / 6 (optional)");
+            CheckBox replace = new CheckBox("Replace current photos (leave unchecked to keep them)");
+            replace.setId("admin-listing-replace-photos"); replace.setVisible(editing); replace.setManaged(editing);
+            Button choose = new Button("Choose Photos (up to 6)"); choose.setId("admin-listing-photos"); choose.setDisable(editing);
+            replace.selectedProperty().addListener((o, old, value) -> choose.setDisable(!value));
+            Label error = new Label(); error.setId("admin-listing-error"); error.setWrapText(true); error.setStyle("-fx-text-fill: #c62828;");
+            error.visibleProperty().bind(error.textProperty().isNotEmpty());
+            error.managedProperty().bind(error.visibleProperty());
+            choose.setOnAction(e -> {
+                javafx.stage.FileChooser chooser = new javafx.stage.FileChooser(); chooser.setTitle("Choose item photos");
+                chooser.getExtensionFilters().add(new javafx.stage.FileChooser.ExtensionFilter("Image files", "*.jpg", "*.jpeg", "*.png", "*.gif", "*.bmp"));
+                List<java.io.File> files = chooser.showOpenMultipleDialog(dialog.getDialogPane().getScene().getWindow());
+                if (files == null) return;
+                List<Path> additions = files.stream().map(java.io.File::toPath).distinct().filter(p -> !photos.contains(p)).toList();
+                if (photos.size() + additions.size() > 6) { error.setText("A listing cannot have more than 6 photos."); return; }
+                photos.addAll(additions); refreshManagedPhotos(photos, photoList, photoCount);
+            });
+            VBox fields = new VBox(8, new Label("Seller username *"), seller, new Label("Item name *"), name,
+                    new Label("Category *"), category, new Label("Condition *"), condition,
+                    new Label("Description *"), description, priceGroup, daysGroup, new Label("Meet-up location *"), meetup);
+            fields.setId("admin-listing-fields");
+            if (editing) {
+                fields.getChildren().add(createPhotoGallery(existing.getPhotoPaths(), false));
+                photoCount.setText("Current photos: " + existing.getPhotoPaths().size() + ". Replacement photos: 0 / 6.");
+            }
+            fields.getChildren().addAll(replace, choose, photoCount, photoList);
+            Runnable adapt = () -> {
+                fields.setDisable(type.getValue() == null);
+                priceGroup.setVisible("Sell".equals(type.getValue())); priceGroup.setManaged(priceGroup.isVisible());
+                daysGroup.setVisible("Lend".equals(type.getValue())); daysGroup.setManaged(daysGroup.isVisible());
+            };
+            type.valueProperty().addListener((o, old, value) -> adapt.run());
+            if (editing) {
+                seller.setValue(existing.getSellerUsername()); seller.setDisable(true);
+                type.setValue(switch (existing.getType()) { case SELL -> "Sell"; case LEND -> "Lend"; case GIVEAWAY -> "Give Away"; });
+                name.setText(existing.getTitle()); category.setValue(existing.getCategory()); condition.setValue(existing.getCondition());
+                description.setText(existing.getDescription()); meetup.setValue(existing.getMeetupLocation());
+                if (existing.getPrice() != null) price.setText(existing.getPrice().toString());
+                if (existing.getLendingDays() != null) days.setText(existing.getLendingDays().toString());
+            }
+            adapt.run();
+            VBox form = new VBox(10, new Label(editing ? "Status: " + existing.getStatus() + " (unchanged by editing)" : "Publishes immediately for the selected seller."),
+                    new Label("Listing type *"), type, fields);
+            form.setPadding(new Insets(12));
+            ScrollPane scroll = new ScrollPane(form); scroll.setFitToWidth(true); scroll.setPrefViewportWidth(600); scroll.setPrefViewportHeight(520);
+            VBox dialogContent = new VBox(8, error, scroll);
+            VBox.setVgrow(scroll, Priority.ALWAYS);
+            dialog.getDialogPane().setContent(dialogContent);
+            save.addEventFilter(ActionEvent.ACTION, event -> {
+                event.consume(); error.setText("");
+                if (type.getValue() == null || seller.getValue() == null || name.getText().isBlank() || category.getValue() == null
+                        || condition.getValue() == null || description.getText().isBlank() || meetup.getValue() == null) {
+                    error.setText("Complete all required listing details."); return;
+                }
+                Listing draft = new Listing();
+                draft.setTitle(name.getText()); draft.setDescription(description.getText()); draft.setCategory(category.getValue());
+                draft.setCondition(condition.getValue()); draft.setMeetupLocation(meetup.getValue());
+                try {
+                    switch (type.getValue()) {
+                        case "Sell" -> {
+                            double value = Double.parseDouble(price.getText().trim());
+                            if (!Double.isFinite(value) || value < 0) throw new NumberFormatException();
+                            draft.setType(ListingType.SELL); draft.setPrice(value);
+                        }
+                        case "Lend" -> {
+                            int value = Integer.parseInt(days.getText().trim()); if (value <= 0) throw new NumberFormatException();
+                            draft.setType(ListingType.LEND); draft.setLendingDays(value);
+                        }
+                        default -> draft.setType(ListingType.GIVEAWAY);
+                    }
+                } catch (NumberFormatException ex) { error.setText("Enter a non-negative price for Sell or a positive whole number of days for Lend."); return; }
+                if (editing) { draft.setId(existing.getId()); draft.setReviewVersion(existing.getReviewVersion()); }
+                List<Path> selectedPhotos = List.copyOf(photos); boolean replacePhotos = replace.isSelected(); String selectedSeller = seller.getValue();
+                Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
+                confirm.setTitle("Confirm Listing Changes"); confirm.setHeaderText((editing ? "Save changes to " : "Publish ") + draft.getTitle().trim() + "?");
+                confirm.setContentText("Seller: @" + selectedSeller + "\nType: " + type.getValue() + "\nStatus: " + (editing ? existing.getStatus() : "LIVE"));
+                confirm.initOwner(dialog.getDialogPane().getScene().getWindow());
+                confirm.setOnHidden(e -> {
+                    if (confirm.getResult() != ButtonType.OK) return;
+                    save.setDisable(true); fields.setDisable(true); type.setDisable(true);
+                    ((Button) dialog.getDialogPane().lookupButton(ButtonType.CANCEL)).setDisable(true);
+                    dialog.setOnCloseRequest(close -> close.consume());
+                    javafx.concurrent.Task<Void> task = new javafx.concurrent.Task<>() {
+                        @Override protected Void call() {
+                            if (editing) DataService.updateListingAsAdmin(draft, selectedPhotos, replacePhotos);
+                            else DataService.addListingForSeller(selectedSeller, draft, selectedPhotos);
+                            return null;
+                        }
+                    };
+                    task.setOnSucceeded(done -> {
+                        dialog.setOnCloseRequest(null); dialog.close();
+                        listingActionMessage = editing ? "Listing changes saved. Status unchanged." : "Listing published. Seller notified.";
+                        showAllListings();
+                    });
+                    task.setOnFailed(done -> {
+                        error.setText("Could not save listing: " + task.getException().getMessage());
+                        save.setDisable(false); fields.setDisable(false); type.setDisable(false);
+                        ((Button) dialog.getDialogPane().lookupButton(ButtonType.CANCEL)).setDisable(false); dialog.setOnCloseRequest(null);
+                    });
+                    Thread worker = new Thread(task, "admin-listing-save"); worker.setDaemon(true); worker.start();
+                }); confirm.show();
+            });
+            dialog.show();
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+            Alert error = new Alert(Alert.AlertType.ERROR, ex.getMessage()); error.initOwner(contentPane.getScene().getWindow()); error.show();
+            showAllListings();
+        }
+    }
+
+    private void refreshManagedPhotos(java.util.List<Path> photos, VBox list, Label count) {
+        list.getChildren().clear(); count.setText("Selected photos: " + photos.size() + " / 6");
+        for (Path photo : List.copyOf(photos)) {
+            ImageView preview = new ImageView(new Image(photo.toUri().toString(), 72, 72, true, true));
+            Button remove = new Button("Remove photo");
+            remove.setOnAction(e -> { photos.remove(photo); refreshManagedPhotos(photos, list, count); });
+            Label file = new Label(photo.getFileName().toString()); file.setWrapText(true);
+            list.getChildren().add(new HBox(8, preview, file, remove));
+        }
+    }
+
+    private void showListingTakedown(Listing listing) {
+        Dialog<Void> dialog = new Dialog<>(); dialog.setTitle("Take Down Listing");
+        dialog.setHeaderText(listing.getTitle() + " (#" + listing.getId() + ")");
+        dialog.initOwner(contentPane.getScene().getWindow()); dialog.setResizable(true);
+        TextArea reason = new TextArea(); reason.setId("admin-listing-takedown-reason"); reason.setWrapText(true); reason.setPrefRowCount(3);
+        Label policy = new Label("The listing will be retained as Removed. The seller and buyers with pending requests will be notified. Pending requests will be declined. Accepted deals and chats are retained.");
+        policy.setWrapText(true); policy.setMaxWidth(480);
+        Label error = new Label(); error.setWrapText(true); error.setStyle("-fx-text-fill: #c62828;");
+        dialog.getDialogPane().setContent(new VBox(10, policy, new Label("Reason *"), reason, error));
+        dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
+        Button proceed = (Button) dialog.getDialogPane().lookupButton(ButtonType.OK); proceed.setText("Continue");
+        proceed.addEventFilter(ActionEvent.ACTION, event -> {
+            event.consume(); error.setText("");
+            if (reason.getText().isBlank()) { error.setText("A takedown reason is required."); return; }
+            String writtenReason = reason.getText().trim();
+            Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
+            confirm.setTitle("Confirm Listing Takedown"); confirm.setHeaderText("Take down " + listing.getTitle() + "?");
+            confirm.setContentText("Listing #" + listing.getId() + "\nReason: " + writtenReason);
+            confirm.initOwner(dialog.getDialogPane().getScene().getWindow());
+            confirm.setOnHidden(e -> {
+                if (confirm.getResult() != ButtonType.OK) return;
+                try {
+                    DataService.takeDownListing(listing.getId(), writtenReason, listing.getReviewVersion());
+                    dialog.close(); listingActionMessage = "Listing taken down. Seller and pending buyers notified.";
+                    showAllListings();
+                } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+                    error.setText("Could not take down listing: " + ex.getMessage());
+                }
+            }); confirm.show();
+        });
+        dialog.show();
     }
 
     @FXML
