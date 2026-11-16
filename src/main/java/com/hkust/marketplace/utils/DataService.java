@@ -227,6 +227,11 @@ public class DataService {
         DatabaseManager.deleteSellerListing(listingId, sellerUsername, expectedVersion);
     }
 
+    public static void completeSellerListing(String listingId, long expectedVersion) {
+        String sellerUsername = requireSeller();
+        DatabaseManager.completeSellerListing(listingId, sellerUsername, expectedVersion);
+    }
+
     private static void validateListingDetails(Listing listing) {
         if (listing.getType() == null
                 || listing.getTitle() == null || listing.getTitle().isBlank()

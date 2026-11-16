@@ -579,7 +579,7 @@ public class BuyerDashboardController {
                     setText(null);
                 } else {
                     String timestamp = message.getTimestamp() == null ? ""
-                            : message.getTimestamp().format(DateTimeFormatter.ofPattern("dd MMM HH:mm:ss"));
+                            : message.getTimestamp().format(DateTimeFormatter.ofPattern("dd MMM HH:mm:ss", Locale.ENGLISH));
                     setText(message.getSender_id() + " (" + timestamp + ")\n" + message.getContent());
                     setWrapText(true);
                 }
