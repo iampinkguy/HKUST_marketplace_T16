@@ -629,8 +629,24 @@ public class AdminDashboardController {
             case SELL -> "Sell"; case LEND -> "Lend"; case GIVEAWAY -> "Giveaway";
         }, 95));
         table.getColumns().add(dealColumn("Start Date", d -> formatDealDate(d.startDate()), 155));
-        table.getColumns().add(dealColumn("Return/Complete Date", d -> formatDealDate(d.completeDate()), 175));
+        table.getColumns().add(dealColumn("Return/Complete Date", this::formatDealEndDate, 175));
         table.getColumns().add(dealColumn("Status", DataService.DealRecord::status, 100));
+        table.setRowFactory(view -> {
+            TableRow<DataService.DealRecord> row = new TableRow<>();
+            row.cursorProperty().bind(javafx.beans.binding.Bindings.when(row.emptyProperty())
+                    .then(javafx.scene.Cursor.DEFAULT).otherwise(javafx.scene.Cursor.HAND));
+            row.setOnMouseClicked(event -> {
+                if (event.getButton() == javafx.scene.input.MouseButton.PRIMARY && event.getClickCount() == 1
+                        && !row.isEmpty()) showDealDetails(row.getItem().requestId());
+            });
+            return row;
+        });
+        table.setOnKeyPressed(event -> {
+            if (event.getCode() == javafx.scene.input.KeyCode.ENTER && table.getSelectionModel().getSelectedItem() != null) {
+                showDealDetails(table.getSelectionModel().getSelectedItem().requestId());
+                event.consume();
+            }
+        });
         Runnable load = () -> {
             ListingType type = switch (typeFilter.getValue()) {
                 case "Sell" -> ListingType.SELL;
@@ -668,12 +684,83 @@ public class AdminDashboardController {
         load.run();
         VBox.setVgrow(table, Priority.ALWAYS);
         root.getChildren().add(table);
-        Label dateNote = new Label("Start Date: borrow start, otherwise request creation. Return/Complete Date: actual return or completion; — means not yet recorded.");
+        Label dateNote = new Label("Start Date: borrow start, otherwise request creation. Return/Complete Date: scheduled return (due) for ongoing loans, actual return/completion for finished deals; — means not recorded.");
         dateNote.setId("deals-date-note");
         dateNote.setWrapText(true);
         dateNote.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 12px;");
         root.getChildren().add(dateNote);
+        Label detailsHint = new Label("Click a deal or select it and press Enter to view details.");
+        detailsHint.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 12px;");
+        root.getChildren().add(detailsHint);
         contentPane.getChildren().add(root);
+    }
+
+    private void showDealDetails(int requestId) {
+        try {
+            DataService.DealDetails details = DataService.getDealDetails(requestId);
+            DataService.DealRecord deal = details.deal();
+            Dialog<Void> dialog = new Dialog<>();
+            dialog.setTitle("Deal Details");
+            dialog.setHeaderText(deal.itemTitle());
+            dialog.initOwner(contentPane.getScene().getWindow());
+            dialog.setResizable(true);
+            dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+            GridPane facts = new GridPane();
+            facts.setHgap(18);
+            facts.setVgap(12);
+            facts.setPadding(new Insets(12));
+            ColumnConstraints values = new ColumnConstraints();
+            values.setHgrow(Priority.ALWAYS);
+            facts.getColumnConstraints().addAll(new ColumnConstraints(145), values);
+            dealFact(facts, "id", "Deal ID", Integer.toString(deal.requestId()));
+            dealFact(facts, "item", "Item Title", deal.itemTitle());
+            dealFact(facts, "buyer", "Buyer Username", deal.buyerUsername());
+            dealFact(facts, "seller", "Seller Username", deal.sellerUsername());
+            dealFact(facts, "type", "Deal Type", switch (deal.dealType()) {
+                case SELL -> "Sell"; case LEND -> "Lend"; case GIVEAWAY -> "Giveaway";
+            });
+            dealFact(facts, "status", "Status", deal.status());
+            dealFact(facts, "category", "Category", details.category());
+            dealFact(facts, "condition", "Condition", details.condition());
+            dealFact(facts, "description", "Description", details.description());
+            dealFact(facts, "meetup", "Meetup Location", details.meetupLocation());
+            dealFact(facts, "requested", "Requested At", formatDealDate(details.requestedAt()));
+            dealFact(facts, "start", "Start Date", formatDealDate(deal.startDate()));
+            if (deal.dealType() == ListingType.SELL) {
+                dealFact(facts, "price", "Agreed Price", details.offerPrice() == null ? null
+                        : String.format(java.util.Locale.ROOT, "HK$%.2f", details.offerPrice()));
+            } else if (deal.dealType() == ListingType.LEND) {
+                dealFact(facts, "borrow-end", "Borrow End", formatDealDate(details.borrowEnd()));
+                if (details.proposedDays() != null) dealFact(facts, "duration", "Lending Duration", details.proposedDays() + " days");
+                dealFact(facts, "scheduled", "Scheduled Return", formatDealDate(deal.scheduledReturnDate()));
+            }
+            dealFact(facts, "completed", deal.dealType() == ListingType.LEND ? "Actual Return" : "Completed At",
+                    formatDealDate(deal.completeDate()));
+            ScrollPane scroll = new ScrollPane(facts);
+            scroll.setFitToWidth(true);
+            scroll.setPrefViewportWidth(580);
+            scroll.setPrefViewportHeight(460);
+            dialog.getDialogPane().setContent(scroll);
+            dialog.show();
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+            Alert error = new Alert(Alert.AlertType.ERROR, ex.getMessage(), ButtonType.CLOSE);
+            error.initOwner(contentPane.getScene().getWindow());
+            error.setTitle("Deal Unavailable");
+            error.setHeaderText("Could not load deal details");
+            error.show();
+        }
+    }
+
+    private void dealFact(GridPane facts, String id, String title, String value) {
+        Label caption = new Label(title);
+        caption.setStyle("-fx-font-weight: bold;");
+        Label detail = new Label(value == null || value.isBlank() ? "—" : value);
+        detail.setId("deal-detail-" + id);
+        detail.setWrapText(true);
+        detail.setMaxWidth(Double.MAX_VALUE);
+        int row = facts.getRowCount();
+        facts.add(caption, 0, row);
+        facts.add(detail, 1, row);
     }
 
     private TableColumn<DataService.DealRecord, String> dealColumn(String title,
@@ -688,6 +775,13 @@ public class AdminDashboardController {
     }
 
     private String formatDealDate(String date) { return date == null ? "—" : date.replace('T', ' '); }
+
+    private String formatDealEndDate(DataService.DealRecord deal) {
+        if (deal.completeDate() != null) return formatDealDate(deal.completeDate());
+        if (deal.scheduledReturnDate() == null) return "—";
+        String due = formatDealDate(deal.scheduledReturnDate());
+        return due.substring(0, Math.min(16, due.length())) + " (due)";
+    }
 
     @FXML
     private void showRatings() {

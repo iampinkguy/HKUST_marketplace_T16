@@ -117,19 +117,23 @@ public class AdminDealServiceTest {
         var admin = SessionManager.getCurrentUser();
         SessionManager.logout();
         assertThrows(SecurityException.class, () -> DataService.getAllDeals(null, null, null));
+        assertThrows(SecurityException.class, () -> DataService.getDealDetails(1));
         for (UserRole role : List.of(UserRole.BUYER, UserRole.SELLER)) {
             SessionManager.login(DataService.authenticate(role.name().toLowerCase(), "Password123", role));
             assertThrows(SecurityException.class, () -> DataService.getAllDeals(null, null, null));
+            assertThrows(SecurityException.class, () -> DataService.getDealDetails(1));
         }
         SessionManager.login(admin);
         admin.setActive(false);
         assertThrows(SecurityException.class, () -> DataService.getAllDeals(null, null, null));
+        assertThrows(SecurityException.class, () -> DataService.getDealDetails(1));
         admin.setActive(true);
         for (String change : List.of("UPDATE users SET active = 0 WHERE username = 'admin'",
                 "UPDATE users SET active = 1, role = 'BUYER' WHERE username = 'admin'",
                 "DELETE FROM users WHERE username = 'admin'")) {
             try (var c = DatabaseManager.connect(); var s = c.createStatement()) { s.executeUpdate(change); }
             assertThrows(SecurityException.class, () -> DataService.getAllDeals(null, null, null));
+            assertThrows(SecurityException.class, () -> DataService.getDealDetails(1));
         }
     }
 
@@ -151,5 +155,41 @@ public class AdminDealServiceTest {
         assertEquals("buyer", records.get(0).buyerUsername());
         assertEquals("seller", records.get(0).sellerUsername());
         assertEquals(ListingType.LEND, records.get(0).dealType());
+    }
+
+    @Test public void ongoingBorrowsExposeTheScheduledReturnWithoutClaimingAnActualReturn() throws Exception {
+        addDeal(1, "Borrowed Calculator", "LEND", "ACCEPTED", "2026-11-17T18:38:57", null, null);
+        try (var c = DatabaseManager.connect(); var s = c.createStatement()) {
+            s.executeUpdate("UPDATE listing_requests SET borrow_end = '2026-11-29T18:39:02', due_at = '2026-11-30T18:39:02' WHERE request_id = 1");
+        }
+        var borrow = DataService.getAllDeals(null, ListingType.LEND, "Accepted").get(0);
+        assertEquals("2026-11-30T18:39:02", borrow.scheduledReturnDate());
+        assertNull(borrow.completeDate());
+        assertEquals("Accepted", borrow.status());
+    }
+
+    @Test public void dealDetailsIncludeTheSelectedItemAndTheAgreedOfferRatherThanItsAskingPrice() throws Exception {
+        addDeal(1, "Calculus Textbook", "SELL", "ACCEPTED", null, "2026-11-10T10:00:00", null);
+        try (var c = DatabaseManager.connect(); var s = c.createStatement()) {
+            s.executeUpdate("UPDATE listings SET price = 180, description = 'Eighth edition, barely used' WHERE listing_id = 1");
+            s.executeUpdate("UPDATE listing_requests SET offer_price = 160 WHERE request_id = 1");
+        }
+        var details = DataService.getDealDetails(1);
+        assertEquals("Calculus Textbook", details.deal().itemTitle());
+        assertEquals("buyer", details.deal().buyerUsername());
+        assertEquals("seller", details.deal().sellerUsername());
+        assertEquals("Completed", details.deal().status());
+        assertEquals("Electronics", details.category());
+        assertEquals("Used", details.condition());
+        assertEquals("Eighth edition, barely used", details.description());
+        assertEquals("Library", details.meetupLocation());
+        assertEquals(Double.valueOf(160), details.offerPrice());
+        assertEquals("2026-11-01T09:00:00", details.requestedAt());
+    }
+
+    @Test public void unavailableAndUnacceptedRequestsCannotBeOpenedAsDealDetails() throws Exception {
+        assertThrows(IllegalStateException.class, () -> DataService.getDealDetails(999));
+        addDeal(1, "Pending Offer", "SELL", "PENDING", null, null, null);
+        assertThrows(IllegalStateException.class, () -> DataService.getDealDetails(1));
     }
 }

@@ -925,13 +925,36 @@ public class DataService {
     }
 
     public record DealRecord(int requestId, String itemTitle, String buyerUsername, String sellerUsername,
-                             ListingType dealType, String startDate, String completeDate, String status) {}
+                             ListingType dealType, String startDate, String completeDate,
+                             String scheduledReturnDate, String status) {}
+
+    public record DealDetails(DealRecord deal, String category, String condition, String description,
+                              String meetupLocation, Double offerPrice, String borrowEnd,
+                              Integer proposedDays, String requestedAt) {}
+
+    /** Reloads a selected deal for read-only admin inspection. */
+    public static DealDetails getDealDetails(int requestId) {
+        requireAdmin();
+        var request = DatabaseManager.fetchRow("listing_requests", "request_id", requestId);
+        if (request == null || !"ACCEPTED".equals(request.get("status"))) {
+            throw new IllegalStateException("This deal is no longer available. Refresh the records.");
+        }
+        var listing = DatabaseManager.fetchRow("listings", "listing_id", request.get("listing_id"));
+        if (listing == null) throw new IllegalStateException("This deal's listing is no longer available. Refresh the records.");
+        return new DealDetails(toDealRecord(request, listing), (String) listing.get("category"),
+                (String) listing.get("item_condition"), (String) listing.get("description"),
+                (String) listing.get("meetup_location"),
+                request.get("offer_price") instanceof Number n ? n.doubleValue() : null,
+                (String) request.get("borrow_end"),
+                request.get("proposed_days") instanceof Number n ? n.intValue() : null,
+                (String) request.get("created_at"));
+    }
 
     /**
      * Read-only system-wide accepted deals, including completed/returned history; requires an active admin.
      * Null type/status disables that filter. Search is a case-insensitive literal title/username match.
      * Start date is borrow_start when present, otherwise request creation; complete date is the actual
-     * return/completion timestamp, never the planned due date.
+     * return/completion timestamp. Scheduled return is exposed separately for borrowed items.
      */
     public static List<DealRecord> getAllDeals(String search, ListingType type, String status) {
         requireAdmin();
@@ -952,17 +975,7 @@ public class DataService {
         for (var row : requests) {
             var listing = listings.get(((Number) row.get("listing_id")).intValue());
             if (listing == null) continue;
-            DealRecord deal = new DealRecord(((Number) row.get("request_id")).intValue(),
-                    (String) listing.get("item_name"), (String) row.get("buyer_username"), (String) listing.get("seller"),
-                    switch ((String) row.get("request_type")) {
-                        case "OFFER" -> ListingType.SELL;
-                        case "BORROW" -> ListingType.LEND;
-                        case "CLAIM" -> ListingType.GIVEAWAY;
-                        default -> throw new IllegalStateException("Unsupported deal type.");
-                    },
-                    (String) (row.get("borrow_start") == null ? row.get("created_at") : row.get("borrow_start")),
-                    (String) (row.get("returned_at") == null ? row.get("completed_at") : row.get("returned_at")),
-                    row.get("returned_at") != null ? "Returned" : row.get("completed_at") != null ? "Completed" : "Accepted");
+            DealRecord deal = toDealRecord(row, listing);
             if (type != null && type != deal.dealType()) continue;
             if (status != null && !status.equals(deal.status())) continue;
             if (!needle.isEmpty() && !deal.itemTitle().toLowerCase(Locale.ROOT).contains(needle)
@@ -971,6 +984,22 @@ public class DataService {
             deals.add(deal);
         }
         return deals;
+    }
+
+    private static DealRecord toDealRecord(Map<String, Object> row, Map<String, Object> listing) {
+        return new DealRecord(((Number) row.get("request_id")).intValue(),
+                (String) listing.get("item_name"), (String) row.get("buyer_username"), (String) listing.get("seller"),
+                switch ((String) row.get("request_type")) {
+                    case "OFFER" -> ListingType.SELL;
+                    case "BORROW" -> ListingType.LEND;
+                    case "CLAIM" -> ListingType.GIVEAWAY;
+                    default -> throw new IllegalStateException("Unsupported deal type.");
+                },
+                (String) (row.get("borrow_start") == null ? row.get("created_at") : row.get("borrow_start")),
+                (String) (row.get("returned_at") == null ? row.get("completed_at") : row.get("returned_at")),
+                "BORROW".equals(row.get("request_type"))
+                        ? (String) (row.get("due_at") == null ? row.get("borrow_end") : row.get("due_at")) : null,
+                row.get("returned_at") != null ? "Returned" : row.get("completed_at") != null ? "Completed" : "Accepted");
     }
 
     public static List<Map<String, Object>> getBuyerDeals() {

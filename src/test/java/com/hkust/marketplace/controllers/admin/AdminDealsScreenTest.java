@@ -6,7 +6,13 @@ import javafx.application.Platform;
 import javafx.fxml.FXMLLoader;
 import javafx.scene.*;
 import javafx.scene.control.*;
+import javafx.scene.input.MouseButton;
+import javafx.scene.input.MouseEvent;
+import javafx.scene.input.PickResult;
+import javafx.scene.input.KeyCode;
+import javafx.scene.input.KeyEvent;
 import javafx.stage.Stage;
+import javafx.stage.Window;
 import org.junit.*;
 import org.junit.rules.TemporaryFolder;
 import java.nio.file.Path;
@@ -90,6 +96,23 @@ public class AdminDealsScreenTest {
     }
     private TextField search() { return (TextField) stage.getScene().lookup("#deals-search"); }
 
+    private DialogPane dealDialog() {
+        for (Window window : List.copyOf(Window.getWindows())) {
+            if (window.isShowing() && window instanceof Stage s && "Deal Details".equals(s.getTitle())
+                    && s.getScene().getRoot() instanceof DialogPane pane) return pane;
+        }
+        return null;
+    }
+    private void clickDeal(int requestId) {
+        table().applyCss();
+        table().layout();
+        TableRow<?> row = table().lookupAll(".table-row-cell").stream()
+                .filter(node -> node instanceof TableRow<?> r && r.getItem() instanceof DataService.DealRecord d
+                        && d.requestId() == requestId).map(node -> (TableRow<?>) node).findFirst().orElseThrow();
+        row.fireEvent(new MouseEvent(MouseEvent.MOUSE_CLICKED, 5, 5, 5, 5, MouseButton.PRIMARY, 1,
+                false, false, false, false, false, false, false, false, false, true, new PickResult(row, 5, 5)));
+    }
+
     @Test public void searchTypeAndStatusFiltersCombineAndClearRestoresAllDeals() throws Exception {
         fx(() -> {
             assertNotNull("Search must be connected", search());
@@ -123,7 +146,7 @@ public class AdminDealsScreenTest {
             assertNotNull("Refresh must reload stored deals", button("deals-refresh"));
             button("deals-refresh").fire();
             assertEquals(4, table().getItems().size());
-            assertEquals("Start Date: borrow start, otherwise request creation. Return/Complete Date: actual return or completion; — means not yet recorded.",
+            assertEquals("Start Date: borrow start, otherwise request creation. Return/Complete Date: scheduled return (due) for ongoing loans, actual return/completion for finished deals; — means not recorded.",
                     ((Label) stage.getScene().lookup("#deals-date-note")).getText());
             return null;
         });
@@ -152,6 +175,79 @@ public class AdminDealsScreenTest {
             button("deals-refresh").fire();
             assertEquals(3, table().getItems().size());
             assertFalse(stage.getScene().lookup("#deals-error").isVisible());
+            return null;
+        });
+    }
+
+    @Test public void ongoingBorrowShowsItsDueDateAndReplacesItWithTheActualReturn() throws Exception {
+        AdminDealServiceTest.addDeal(4, "Ongoing Borrow", "LEND", "ACCEPTED", "2026-11-17T18:38:57", null, null);
+        try (var c = DatabaseManager.connect(); var s = c.createStatement()) {
+            s.executeUpdate("UPDATE listing_requests SET borrow_end = '2026-11-30T18:39:02', due_at = '2026-11-30T18:39:02' WHERE request_id = 4");
+        }
+        fx(() -> {
+            button("deals-refresh").fire();
+            var borrow = table().getItems().stream().filter(d -> d.requestId() == 4).findFirst().orElseThrow();
+            assertEquals("2026-11-30 18:39 (due)", table().getColumns().get(5).getCellData(borrow));
+            assertEquals("Accepted", table().getColumns().get(6).getCellData(borrow));
+            return null;
+        });
+        try (var c = DatabaseManager.connect(); var s = c.createStatement()) {
+            s.executeUpdate("UPDATE listing_requests SET returned_at = '2026-11-20T10:00:00', completed_at = '2026-11-20T10:00:00' WHERE request_id = 4");
+        }
+        fx(() -> {
+            button("deals-refresh").fire();
+            var borrow = table().getItems().stream().filter(d -> d.requestId() == 4).findFirst().orElseThrow();
+            assertEquals("2026-11-20 10:00:00", table().getColumns().get(5).getCellData(borrow));
+            assertEquals("Returned", table().getColumns().get(6).getCellData(borrow));
+            return null;
+        });
+    }
+
+    @Test public void clickingADealOpensReadOnlyDetailsAndClosingKeepsTheCurrentFilters() throws Exception {
+        try (var c = DatabaseManager.connect(); var s = c.createStatement()) {
+            s.executeUpdate("UPDATE listings SET description = 'Barely used, eighth edition', price = 180 WHERE listing_id = 1");
+            s.executeUpdate("UPDATE listing_requests SET offer_price = 160 WHERE request_id = 1");
+        }
+        fx(() -> {
+            search().setText("textbook");
+            clickDeal(1);
+            DialogPane pane = dealDialog();
+            assertNotNull("A single row click must open Deal Details", pane);
+            assertEquals("Calculus Textbook", ((Label) pane.lookup("#deal-detail-item")).getText());
+            assertEquals("buyer", ((Label) pane.lookup("#deal-detail-buyer")).getText());
+            assertEquals("seller", ((Label) pane.lookup("#deal-detail-seller")).getText());
+            assertEquals("HK$160.00", ((Label) pane.lookup("#deal-detail-price")).getText());
+            assertEquals("Barely used, eighth edition", ((Label) pane.lookup("#deal-detail-description")).getText());
+            assertEquals("2026-11-10 10:00:00", ((Label) pane.lookup("#deal-detail-completed")).getText());
+            assertEquals(List.of(ButtonType.CLOSE), List.copyOf(pane.getButtonTypes()));
+            assertTrue("Details must be read-only", pane.lookupAll(".text-input").isEmpty());
+            ((Button) pane.lookupButton(ButtonType.CLOSE)).fire();
+            assertNull(dealDialog());
+            assertEquals("textbook", search().getText());
+            assertEquals(1, table().getItems().size());
+            return null;
+        });
+    }
+
+    @Test public void enterOpensTheSelectedBorrowWithScheduledAndActualReturnShownSeparately() throws Exception {
+        AdminDealServiceTest.addDeal(4, "Ongoing Borrow", "LEND", "ACCEPTED", "2026-11-17T18:38:57", null, null);
+        try (var c = DatabaseManager.connect(); var s = c.createStatement()) {
+            s.executeUpdate("UPDATE listing_requests SET borrow_end = '2026-11-30T18:39:02', due_at = '2026-11-30T18:39:02', proposed_days = 13 WHERE request_id = 4");
+        }
+        fx(() -> {
+            button("deals-refresh").fire();
+            table().getSelectionModel().select(table().getItems().stream().filter(d -> d.requestId() == 4).findFirst().orElseThrow());
+            table().fireEvent(new KeyEvent(KeyEvent.KEY_PRESSED, "", "", KeyCode.ENTER, false, false, false, false));
+            DialogPane pane = dealDialog();
+            assertNotNull("Enter must open the selected deal", pane);
+            assertEquals("Ongoing Borrow", ((Label) pane.lookup("#deal-detail-item")).getText());
+            assertEquals("2026-11-17 18:38:57", ((Label) pane.lookup("#deal-detail-start")).getText());
+            assertEquals("2026-11-30 18:39:02", ((Label) pane.lookup("#deal-detail-scheduled")).getText());
+            assertEquals("2026-11-30 18:39:02", ((Label) pane.lookup("#deal-detail-borrow-end")).getText());
+            assertEquals("13 days", ((Label) pane.lookup("#deal-detail-duration")).getText());
+            assertEquals("—", ((Label) pane.lookup("#deal-detail-completed")).getText());
+            assertNull("A borrowing deal has no sale price", pane.lookup("#deal-detail-price"));
+            ((Button) pane.lookupButton(ButtonType.CLOSE)).fire();
             return null;
         });
     }
