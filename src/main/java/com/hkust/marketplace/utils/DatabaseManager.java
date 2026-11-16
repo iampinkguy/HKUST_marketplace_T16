@@ -7,8 +7,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.*;
-import java.time.Duration;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -1350,8 +1351,9 @@ public class DatabaseManager {
                 };
                 insertNotification(connection, buyer, sellerUsername, title, message, "Offer", requestId, listingId);
                 if (dueAt != null) {
+                    String dueDate = dueAt.length() >= 10 ? dueAt.substring(0, 10) : dueAt;
                     insertNotification(connection, buyer, sellerUsername, "Borrow due-date reminder",
-                            "Return " + itemName + " by " + dueAt.replace('T', ' ') + ".", "Reminder",
+                            "Return " + itemName + " by " + dueDate + ".", "Reminder",
                             requestId, listingId);
                 }
 
@@ -1501,6 +1503,15 @@ public class DatabaseManager {
             listings.add(DataService.toListing(row));
         }
         return listings;
+    }
+
+    public static List<Integer> fetchFavouriteListingIds(String buyerUsername) {
+        List<Integer> ids = new ArrayList<>();
+        for (Map<String, Object> row : fetchQuery(
+                "SELECT listing_id FROM favourites WHERE buyer_username = ?", buyerUsername)) {
+            ids.add(((Number) row.get("listing_id")).intValue());
+        }
+        return ids;
     }
 
     public static void setFavourite(String buyerUsername, int listingId, boolean favourite) {
@@ -2081,18 +2092,39 @@ public class DatabaseManager {
     public static int createBorrowRequest(String buyerUsername, int listingId,
                                           LocalDateTime start, LocalDateTime end) {
         if (start == null || end == null) {
-            throw new IllegalArgumentException("Choose a borrow start and end time.");
+            throw new IllegalArgumentException("Choose a borrow start date and end date.");
         }
-        long seconds = Duration.between(start, end).getSeconds();
-        if (seconds < 5) {
-            throw new IllegalArgumentException("Borrowing period must be at least 5 seconds.");
+        LocalDate startDate = start.toLocalDate();
+        LocalDate endDate = end.toLocalDate();
+        if (startDate.isBefore(LocalDate.now())) {
+            throw new IllegalArgumentException("Borrow start date cannot be in the past.");
         }
-        if (start.isBefore(LocalDateTime.now().minusSeconds(2))) {
-            throw new IllegalArgumentException("Borrow start time cannot be in the past.");
-        }
-        int proposedDays = (int) Math.max(1, (seconds + 86_399) / 86_400);
         LocalDateTime now = LocalDateTime.now();
-        String insertRequest = """
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            int lendingDays;
+            try (PreparedStatement listing = connection.prepareStatement(
+                    "SELECT lending_days FROM listings WHERE listing_id = ? AND listing_type = 'LEND'")) {
+                listing.setInt(1, listingId);
+                try (ResultSet result = listing.executeQuery()) {
+                    if (!result.next() || result.getObject("lending_days") == null) {
+                        throw new IllegalArgumentException("This listing does not have a lending period.");
+                    }
+                    lendingDays = result.getInt("lending_days");
+                }
+            }
+            if (lendingDays <= 0) {
+                throw new IllegalArgumentException("This listing does not have a lending period.");
+            }
+            long requestedDays = ChronoUnit.DAYS.between(startDate, endDate);
+            if (requestedDays < 1) {
+                throw new IllegalArgumentException("Borrow at least 1 day.");
+            }
+            if (requestedDays > lendingDays) {
+                throw new IllegalArgumentException("You can borrow this item for at most " + lendingDays
+                        + (lendingDays == 1 ? " day." : " days."));
+            }
+            String insertRequest = """
                 INSERT INTO listing_requests
                     (buyer_username, listing_id, request_type, proposed_days, borrow_start, borrow_end,
                      created_at, updated_at)
@@ -2100,20 +2132,20 @@ public class DatabaseManager {
                 FROM listings l
                 WHERE l.listing_id = ? AND l.listing_status = 'LIVE'
                     AND l.availability_status = 'Available' AND l.listing_type = 'LEND'
+                    AND l.lending_days >= ?
                     AND l.seller <> ? COLLATE NOCASE
                 """;
-        try (Connection connection = connect()) {
-            connection.setAutoCommit(false);
             try (PreparedStatement statement = connection.prepareStatement(
                     insertRequest, Statement.RETURN_GENERATED_KEYS)) {
                 statement.setString(1, buyerUsername);
-                statement.setInt(2, proposedDays);
-                statement.setString(3, start.toString());
-                statement.setString(4, end.toString());
+                statement.setInt(2, (int) requestedDays);
+                statement.setString(3, startDate.atStartOfDay().toString());
+                statement.setString(4, endDate.atStartOfDay().toString());
                 statement.setString(5, now.toString());
                 statement.setString(6, now.toString());
                 statement.setInt(7, listingId);
-                statement.setString(8, buyerUsername);
+                statement.setInt(8, (int) requestedDays);
+                statement.setString(9, buyerUsername);
                 if (statement.executeUpdate() != 1) {
                     throw new IllegalStateException("This listing is no longer available for requests.");
                 }
@@ -2126,8 +2158,8 @@ public class DatabaseManager {
                 String itemName = fetchString(connection, "SELECT item_name FROM listings WHERE listing_id = ?", listingId);
                 insertNotification(connection, seller, buyerUsername, "New borrow request",
                         buyerUsername + " requested to borrow " + itemName + " from "
-                                + start.toString().replace('T', ' ') + " to "
-                                + end.toString().replace('T', ' ') + ".", "Offer");
+                                + startDate + " to " + endDate + " (" + requestedDays
+                                + (requestedDays == 1 ? " day)." : " days)."), "Offer");
                 connection.commit();
                 return requestId;
             } catch (RuntimeException | SQLException e) {

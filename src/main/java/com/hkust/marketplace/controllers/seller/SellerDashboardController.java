@@ -399,6 +399,12 @@ public class SellerDashboardController {
                 fact("Availability", listing.getAvailabilityStatus() + " · " + listing.getStatus()),
                 fact("Views", Integer.toString(listing.getViewCount()))
         );
+        if (listing.getType() == ListingType.LEND) {
+            String period = listing.getLendingDays() == null || listing.getLendingDays() <= 0
+                    ? "Not set"
+                    : listing.getLendingDays() + (listing.getLendingDays() == 1 ? " day" : " days");
+            facts.getChildren().add(3, fact("Lending period", period));
+        }
         if (listing.getRejectionReason() != null && !listing.getRejectionReason().isBlank()) {
             facts.getChildren().add(fact("Admin feedback", listing.getRejectionReason()));
         }
