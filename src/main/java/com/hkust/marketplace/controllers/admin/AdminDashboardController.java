@@ -588,31 +588,106 @@ public class AdminDashboardController {
         VBox root = new VBox(12);
         root.setPadding(new Insets(4));
 
-        HBox filters = new HBox(10);
+        FlowPane filters = new FlowPane(10, 8);
         filters.setAlignment(Pos.CENTER_LEFT);
         TextField search = new TextField();
-        search.setPromptText("Search by item / user...");
+        search.setId("deals-search");
+        search.setPromptText("Search item title / buyer / seller...");
+        search.setPrefWidth(260);
         ComboBox<String> typeFilter = new ComboBox<>(FXCollections.observableArrayList("All Types", "Sell", "Lend", "Giveaway"));
+        typeFilter.setId("deals-type");
         typeFilter.getSelectionModel().selectFirst();
-        filters.getChildren().addAll(search, typeFilter);
+        ComboBox<String> statusFilter = new ComboBox<>(FXCollections.observableArrayList("All Statuses", "Accepted", "Completed", "Returned"));
+        statusFilter.setId("deals-status");
+        statusFilter.getSelectionModel().selectFirst();
+        Button clear = new Button("Clear");
+        clear.setId("deals-clear");
+        clear.getStyleClass().add("btn-outline");
+        Button refresh = new Button("Refresh");
+        refresh.setId("deals-refresh");
+        refresh.getStyleClass().add("btn-outline");
+        filters.getChildren().addAll(search, new Label("Type"), typeFilter, new Label("Status"), statusFilter, clear, refresh);
         root.getChildren().add(filters);
+        Label count = new Label();
+        count.setId("deals-count");
+        root.getChildren().add(count);
+        Label error = new Label();
+        error.setId("deals-error");
+        error.setWrapText(true);
+        error.setStyle("-fx-text-fill: #c62828;");
+        error.setVisible(false);
+        error.setManaged(false);
+        root.getChildren().add(error);
 
-        TableView<String[]> table = new TableView<>();
+        TableView<DataService.DealRecord> table = new TableView<>();
+        table.setId("deals-table");
         table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
-        String[] headers = {"Item", "Buyer", "Seller", "Type", "Status", "Date"};
-        for (int i = 0; i < headers.length; i++) {
-            final int idx = i;
-            TableColumn<String[], String> col = new TableColumn<>(headers[i]);
-            col.setCellValueFactory(c -> new javafx.beans.property.SimpleStringProperty(c.getValue()[idx]));
-            table.getColumns().add(col);
-        }
-        table.setItems(FXCollections.observableArrayList(
-                new String[]{"Calculus Textbook", "alice", "charlie", "Sell", "Accepted", "2026-01-15"},
-                new String[]{"USB Hub", "bob", "diana", "Giveaway", "Completed", "2025-12-01"}
-        ));
+        table.getColumns().add(dealColumn("Item Title", DataService.DealRecord::itemTitle, 180));
+        table.getColumns().add(dealColumn("Buyer Username", DataService.DealRecord::buyerUsername, 125));
+        table.getColumns().add(dealColumn("Seller Username", DataService.DealRecord::sellerUsername, 125));
+        table.getColumns().add(dealColumn("Deal Type", d -> switch (d.dealType()) {
+            case SELL -> "Sell"; case LEND -> "Lend"; case GIVEAWAY -> "Giveaway";
+        }, 95));
+        table.getColumns().add(dealColumn("Start Date", d -> formatDealDate(d.startDate()), 155));
+        table.getColumns().add(dealColumn("Return/Complete Date", d -> formatDealDate(d.completeDate()), 175));
+        table.getColumns().add(dealColumn("Status", DataService.DealRecord::status, 100));
+        Runnable load = () -> {
+            ListingType type = switch (typeFilter.getValue()) {
+                case "Sell" -> ListingType.SELL;
+                case "Lend" -> ListingType.LEND;
+                case "Giveaway" -> ListingType.GIVEAWAY;
+                default -> null;
+            };
+            String status = "All Statuses".equals(statusFilter.getValue()) ? null : statusFilter.getValue();
+            error.setVisible(false);
+            error.setManaged(false);
+            try {
+                table.setItems(FXCollections.observableArrayList(DataService.getAllDeals(search.getText(), type, status)));
+                boolean filtered = !search.getText().isBlank() || type != null || status != null;
+                table.setPlaceholder(new Label(filtered ? "No deals match these filters." : "No deals recorded yet."));
+                int size = table.getItems().size();
+                count.setText(size + (size == 1 ? " deal" : " deals"));
+            } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+                table.getItems().clear();
+                table.setPlaceholder(new Label("Could not load deals. Use Refresh to try again."));
+                count.setText("Deals unavailable");
+                error.setText("Could not load deals. " + ex.getMessage());
+                error.setVisible(true);
+                error.setManaged(true);
+            }
+        };
+        search.textProperty().addListener((observable, previous, next) -> load.run());
+        typeFilter.valueProperty().addListener((observable, previous, next) -> load.run());
+        statusFilter.valueProperty().addListener((observable, previous, next) -> load.run());
+        clear.setOnAction(event -> {
+            search.clear();
+            typeFilter.getSelectionModel().selectFirst();
+            statusFilter.getSelectionModel().selectFirst();
+        });
+        refresh.setOnAction(event -> load.run());
+        load.run();
+        VBox.setVgrow(table, Priority.ALWAYS);
         root.getChildren().add(table);
+        Label dateNote = new Label("Start Date: borrow start, otherwise request creation. Return/Complete Date: actual return or completion; — means not yet recorded.");
+        dateNote.setId("deals-date-note");
+        dateNote.setWrapText(true);
+        dateNote.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 12px;");
+        root.getChildren().add(dateNote);
         contentPane.getChildren().add(root);
     }
+
+    private TableColumn<DataService.DealRecord, String> dealColumn(String title,
+            java.util.function.Function<DataService.DealRecord, String> value, double width) {
+        TableColumn<DataService.DealRecord, String> column = new TableColumn<>(title);
+        column.setPrefWidth(width);
+        column.setCellValueFactory(cell -> {
+            String text = value.apply(cell.getValue());
+            return new javafx.beans.property.SimpleStringProperty(text == null ? "—" : text);
+        });
+        return column;
+    }
+
+    private String formatDealDate(String date) { return date == null ? "—" : date.replace('T', ' '); }
 
     @FXML
     private void showRatings() {

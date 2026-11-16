@@ -17,6 +17,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -921,6 +922,55 @@ public class DataService {
             throw new IllegalArgumentException("You cannot request your own listing.");
         }
         return DatabaseManager.createBorrowRequest(buyer, id, start, end);
+    }
+
+    public record DealRecord(int requestId, String itemTitle, String buyerUsername, String sellerUsername,
+                             ListingType dealType, String startDate, String completeDate, String status) {}
+
+    /**
+     * Read-only system-wide accepted deals, including completed/returned history; requires an active admin.
+     * Null type/status disables that filter. Search is a case-insensitive literal title/username match.
+     * Start date is borrow_start when present, otherwise request creation; complete date is the actual
+     * return/completion timestamp, never the planned due date.
+     */
+    public static List<DealRecord> getAllDeals(String search, ListingType type, String status) {
+        requireAdmin();
+        String needle = search == null ? "" : search.trim().toLowerCase(Locale.ROOT);
+        Map<Integer, Map<String, Object>> listings = new HashMap<>();
+        for (var row : DatabaseManager.fetchRows("listings", Map.of())) {
+            listings.put(((Number) row.get("listing_id")).intValue(), row);
+        }
+        List<DealRecord> deals = new ArrayList<>();
+        var requests = DatabaseManager.fetchRows("listing_requests", Map.of("status", "ACCEPTED"));
+        requests.sort(Comparator.comparing((Map<String, Object> row) -> {
+            Object at = row.get("returned_at");
+            if (at == null) at = row.get("completed_at");
+            if (at == null) at = row.get("updated_at");
+            if (at == null) at = row.get("created_at");
+            return at.toString().replace(' ', 'T');
+        }).reversed().thenComparing(row -> ((Number) row.get("request_id")).intValue(), Comparator.reverseOrder()));
+        for (var row : requests) {
+            var listing = listings.get(((Number) row.get("listing_id")).intValue());
+            if (listing == null) continue;
+            DealRecord deal = new DealRecord(((Number) row.get("request_id")).intValue(),
+                    (String) listing.get("item_name"), (String) row.get("buyer_username"), (String) listing.get("seller"),
+                    switch ((String) row.get("request_type")) {
+                        case "OFFER" -> ListingType.SELL;
+                        case "BORROW" -> ListingType.LEND;
+                        case "CLAIM" -> ListingType.GIVEAWAY;
+                        default -> throw new IllegalStateException("Unsupported deal type.");
+                    },
+                    (String) (row.get("borrow_start") == null ? row.get("created_at") : row.get("borrow_start")),
+                    (String) (row.get("returned_at") == null ? row.get("completed_at") : row.get("returned_at")),
+                    row.get("returned_at") != null ? "Returned" : row.get("completed_at") != null ? "Completed" : "Accepted");
+            if (type != null && type != deal.dealType()) continue;
+            if (status != null && !status.equals(deal.status())) continue;
+            if (!needle.isEmpty() && !deal.itemTitle().toLowerCase(Locale.ROOT).contains(needle)
+                    && !deal.buyerUsername().toLowerCase(Locale.ROOT).contains(needle)
+                    && !deal.sellerUsername().toLowerCase(Locale.ROOT).contains(needle)) continue;
+            deals.add(deal);
+        }
+        return deals;
     }
 
     public static List<Map<String, Object>> getBuyerDeals() {

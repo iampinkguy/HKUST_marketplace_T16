@@ -68,8 +68,8 @@
                 </VBox>
             </HBox>
 
-            <Label text="Frontend Demo · Skeleton for COMP Project  ·  No backend connected"
-                   style="-fx-text-fill: #6a849e; -fx-font-size: 12px;"/>
+            <!--<Label text="Frontend Demo · Skeleton for COMP Project  ·  No backend connected"
+                   style="-fx-text-fill: #6a849e; -fx-font-size: 12px;"/>-->
         </VBox>
     </center>
 </BorderPane>
