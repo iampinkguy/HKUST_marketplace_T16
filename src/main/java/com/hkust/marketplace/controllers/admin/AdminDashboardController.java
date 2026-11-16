@@ -28,6 +28,8 @@ public class AdminDashboardController {
     @FXML private Button btnReview, btnAllListings, btnUsers, btnDeals, btnRatings, btnNotifications, btnProfile;
 
     private Button currentActiveBtn;
+    private String userActionMessage;
+    private boolean includeDeletedUsers;
 
     @FXML
     public void initialize() {
@@ -354,16 +356,27 @@ public class AdminDashboardController {
         VBox root = new VBox(12);
         root.setPadding(new Insets(4));
 
-        List<User> users;
+        CheckBox showDeleted = new CheckBox("Include permanently deleted accounts (read-only history)");
+        showDeleted.setId("show-deleted-users");
+        showDeleted.setSelected(includeDeletedUsers);
+        showDeleted.setOnAction(event -> { includeDeletedUsers = showDeleted.isSelected(); showUsers(); });
+        root.getChildren().add(showDeleted);
+        if (userActionMessage != null) {
+            Label message = new Label(userActionMessage);
+            message.setStyle("-fx-text-fill: #2e7d32;");
+            root.getChildren().add(message);
+            userActionMessage = null;
+        }
+        List<AdminUserService.Account> users;
         try {
-            users = DataService.getAllUsers();
+            users = AdminUserService.getAllUsers(includeDeletedUsers);
         } catch (IllegalStateException | SecurityException ex) {
             root.getChildren().add(new Label("Could not load users: " + ex.getMessage()));
             contentPane.getChildren().add(root);
             return;
         }
-        for (User u : users) {
-            if (u.getRole() == UserRole.ADMIN) continue;
+        if (users.isEmpty()) root.getChildren().add(new Label("No buyer or seller accounts found."));
+        for (AdminUserService.Account u : users) {
 
             HBox row = new HBox(12);
             row.getStyleClass().add("card");
@@ -372,51 +385,199 @@ public class AdminDashboardController {
 
             VBox info = new VBox(3);
             HBox.setHgrow(info, Priority.ALWAYS);
-            Label name = new Label(u.getFullName() + " (@" + u.getUsername() + ")");
+            Label name = new Label(u.fullName() + " (@" + u.username() + ")");
             name.setStyle("-fx-font-weight: bold;");
-            Label role = new Label(u.getRole().name() + (u.isActive() ? " · Active" : " · Deactivated"));
+            Label role = new Label(u.role().name() + (u.deletedAt() != null ? " · Permanently deleted"
+                    : u.active() ? " · Active" : " · Deactivated"));
             role.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 12px;");
             info.getChildren().addAll(name, role);
 
+            Button view = new Button("View");
+            view.setId("view-user-" + u.username());
+            view.getStyleClass().addAll("btn-outline", "btn-sm");
+            view.setOnAction(event -> viewManagedUser(u));
+
             Button edit = new Button("Edit");
+            edit.setId("edit-user-" + u.username());
             edit.getStyleClass().addAll("btn-outline", "btn-sm");
-            edit.setOnAction(e -> new Alert(Alert.AlertType.INFORMATION, "Edit user dialog (demo).").showAndWait());
+            edit.setOnAction(event -> editManagedUser(u));
+            edit.setDisable(u.deletedAt() != null);
 
-            Button toggle = new Button(u.isActive() ? "Deactivate" : "Activate");
-            toggle.getStyleClass().addAll(u.isActive() ? "btn-danger" : "btn-success", "btn-sm");
-            toggle.setOnAction(e -> {
-                try {
-                    DataService.setUserActive(u.getUsername(), !u.isActive());
-                    showUsers();
-                } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
-                    new Alert(Alert.AlertType.ERROR, ex.getMessage()).showAndWait();
-                }
-            });
+            Button toggle = new Button(u.active() ? "Deactivate" : "Activate");
+            toggle.setId("active-user-" + u.username());
+            toggle.getStyleClass().addAll(u.active() ? "btn-danger" : "btn-success", "btn-sm");
+            toggle.setDisable(u.deletedAt() != null);
+            toggle.setOnAction(event -> confirmManagedUserChange(u, false));
 
-            Button delete = new Button("Delete");
+            Button delete = new Button("Permanently delete");
+            delete.setId("delete-user-" + u.username());
             delete.getStyleClass().addAll("btn-danger", "btn-sm");
-            delete.setOnAction(e -> {
-                Alert conf = new Alert(Alert.AlertType.CONFIRMATION,
-                        "Permanently delete user @" + u.getUsername() + "?");
-                conf.showAndWait().ifPresent(r -> {
-                    if (r == ButtonType.OK) {
-                        try {
-                            DataService.setUserActive(u.getUsername(), false);
-                            new Alert(Alert.AlertType.INFORMATION, "User deactivated.").showAndWait();
-                            showUsers();
-                        } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
-                            new Alert(Alert.AlertType.ERROR, ex.getMessage()).showAndWait();
-                        }
-                    }
-                });
-            });
+            delete.setDisable(u.deletedAt() != null);
+            delete.setOnAction(event -> confirmManagedUserChange(u, true));
+            Button history = new Button("History");
+            history.setId("history-user-" + u.username());
+            history.getStyleClass().addAll("btn-outline", "btn-sm");
+            history.setOnAction(event -> showManagedUserHistory(u));
 
-            row.getChildren().addAll(info, edit, toggle, delete);
+            row.getChildren().addAll(info, view, edit, toggle, delete, history);
             root.getChildren().add(row);
         }
         ScrollPane scroll = new ScrollPane(root);
         scroll.setFitToWidth(true);
         contentPane.getChildren().add(scroll);
+    }
+
+    private AdminUserService.Account currentManagedUser(AdminUserService.Account displayed) {
+        AdminUserService.Account current = AdminUserService.getAllUsers(true).stream()
+                .filter(user -> user.username().equals(displayed.username())).findFirst()
+                .orElseThrow(() -> new IllegalStateException("Account no longer exists. Refresh the user list."));
+        if (current.version() != displayed.version()) {
+            throw new IllegalStateException("Account changed since it was displayed. Refresh and review it again.");
+        }
+        return current;
+    }
+
+    private void viewManagedUser(AdminUserService.Account displayed) {
+        try {
+            AdminUserService.Account user = currentManagedUser(displayed);
+            Dialog<ButtonType> details = new Dialog<>();
+            details.setTitle("User Details");
+            details.setHeaderText(user.fullName() + " (@" + user.username() + ")");
+            Label fields = new Label("Username: " + user.username() + "\nRole: " + user.role()
+                    + "\nStatus: " + (user.deletedAt() != null ? "Permanently deleted" : user.active() ? "Active" : "Deactivated")
+                    + "\nCreated: " + formatDate(user.createdAt())
+                    + "\nResidence hall: " + optionalUserField(user.residenceHall())
+                    + "\nBio: " + optionalUserField(user.bio())
+                    + "\nPreferred meetup: " + optionalUserField(user.preferredMeetup())
+                    + (user.deletedAt() == null ? "" : "\nDeleted: " + formatDate(user.deletedAt())));
+            fields.setWrapText(true);
+            VBox body = new VBox(fields);
+            body.setPadding(new Insets(16));
+            body.setPrefWidth(450);
+            details.getDialogPane().setContent(body);
+            details.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+            details.setResizable(true);
+            details.showAndWait();
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+            showUserManagementError(ex);
+            showUsers();
+        }
+    }
+
+    private void editManagedUser(AdminUserService.Account displayed) {
+        try {
+            AdminUserService.Account user = currentManagedUser(displayed);
+            if (user.deletedAt() != null) throw new IllegalStateException("Permanently deleted accounts cannot be edited.");
+            Dialog<ButtonType> edit = new Dialog<>();
+            edit.setTitle("Edit User");
+            edit.setHeaderText("Username: " + user.username() + " · Role: " + user.role());
+            TextField fullName = new TextField(user.fullName());
+            fullName.setId("user-full-name");
+            ComboBox<String> hall = new ComboBox<>(FXCollections.observableArrayList(DataService.RESIDENCES));
+            hall.getItems().add(0, "Not specified");
+            hall.setValue(user.residenceHall() == null ? "Not specified" : user.residenceHall());
+            hall.setId("user-residence-hall");
+            TextArea bio = new TextArea(user.bio());
+            bio.setWrapText(true);
+            bio.setPrefRowCount(4);
+            bio.setId("user-bio");
+            ComboBox<String> meetup = new ComboBox<>(FXCollections.observableArrayList(DataService.HKUST_LOCATIONS));
+            meetup.getItems().add(0, "Not specified");
+            meetup.setValue(user.preferredMeetup() == null ? "Not specified" : user.preferredMeetup());
+            meetup.setId("user-preferred-meetup");
+            Label error = new Label();
+            error.setWrapText(true);
+            error.setStyle("-fx-text-fill: #c62828;");
+            VBox form = new VBox(10, new Label("Full name"), fullName);
+            form.setPadding(new Insets(16));
+            form.setPrefWidth(460);
+            if (user.role() == UserRole.BUYER) form.getChildren().addAll(new Label("Residence hall"), hall);
+            else form.getChildren().addAll(new Label("Bio"), bio, new Label("Preferred meetup"), meetup);
+            form.getChildren().add(error);
+            edit.getDialogPane().setContent(form);
+            ButtonType save = new ButtonType("Save", ButtonBar.ButtonData.OK_DONE);
+            edit.getDialogPane().getButtonTypes().addAll(save, ButtonType.CANCEL);
+            edit.getDialogPane().lookupButton(save).setId("save-user");
+            edit.getDialogPane().lookupButton(save).addEventFilter(ActionEvent.ACTION, event -> {
+                event.consume();
+                try {
+                    AdminUserService.updateUser(user, fullName.getText(),
+                            "Not specified".equals(hall.getValue()) ? null : hall.getValue(), bio.getText(),
+                            "Not specified".equals(meetup.getValue()) ? null : meetup.getValue());
+                    edit.close();
+                    userActionMessage = "Account updated.";
+                    showUsers();
+                } catch (IllegalArgumentException ex) {
+                    error.setText(ex.getMessage());
+                } catch (IllegalStateException | SecurityException ex) {
+                    showUserManagementError(ex);
+                    edit.close();
+                    showUsers();
+                }
+            });
+            edit.showAndWait();
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+            showUserManagementError(ex);
+            showUsers();
+        }
+    }
+
+    private String optionalUserField(String value) { return value == null || value.isBlank() ? "Not specified" : value; }
+
+    private void confirmManagedUserChange(AdminUserService.Account displayed, boolean delete) {
+        String action = delete ? "Permanently delete" : displayed.active() ? "Deactivate" : "Activate";
+        Alert confirmation = new Alert(Alert.AlertType.CONFIRMATION);
+        confirmation.setTitle(delete ? "Permanently Delete User" : displayed.active() ? "Confirm Deactivation" : "Confirm Activation");
+        confirmation.setHeaderText(action + " " + displayed.fullName() + " (@" + displayed.username() + ")?");
+        confirmation.setContentText(delete
+                ? "Login credentials and profile details will be erased. This cannot be undone.\n\n"
+                    + "The username remains as a historical account identifier. Published and pending listings are withdrawn. "
+                    + "Listings, deals, chats and the audit log are retained. Existing deals are not automatically cancelled."
+                : displayed.active()
+                    ? "Sign-in will be blocked. Profile, listings, deals and chats are retained unchanged. This account can be reactivated."
+                    : "Sign-in will be restored using the existing profile and credentials.");
+        confirmation.getDialogPane().setPrefWidth(540);
+        if (confirmation.showAndWait().orElse(ButtonType.CANCEL) != ButtonType.OK) return;
+        try {
+            if (delete) AdminUserService.deleteUser(displayed);
+            else AdminUserService.setUserActive(displayed, !displayed.active());
+            userActionMessage = delete ? "Account permanently deleted. History retained."
+                    : displayed.active() ? "Account deactivated." : "Account activated.";
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+            showUserManagementError(ex);
+        }
+        showUsers();
+    }
+
+    private void showManagedUserHistory(AdminUserService.Account user) {
+        try {
+            List<AdminUserService.Event> events = AdminUserService.getHistory(user.username());
+            StringBuilder text = new StringBuilder("Account: @" + user.username() + "\n");
+            if (events.isEmpty()) text.append("No saved management actions.");
+            for (AdminUserService.Event event : events) {
+                text.append("\n").append(formatDate(event.at())).append(" | ").append(event.action())
+                        .append(" | Admin: ").append(event.admin());
+            }
+            TextArea history = new TextArea(text.toString());
+            history.setEditable(false);
+            history.setWrapText(true);
+            history.setPrefRowCount(12);
+            Dialog<ButtonType> dialog = new Dialog<>();
+            dialog.setTitle("Account History");
+            dialog.setHeaderText("Saved management actions for @" + user.username());
+            dialog.getDialogPane().setContent(history);
+            dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+            dialog.setResizable(true);
+            dialog.showAndWait();
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+            showUserManagementError(ex);
+        }
+    }
+
+    private void showUserManagementError(RuntimeException failure) {
+        Alert error = new Alert(Alert.AlertType.ERROR, failure.getMessage());
+        error.setTitle("User Change Not Saved");
+        error.showAndWait();
     }
 
     @FXML
