@@ -23,6 +23,8 @@ import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.*;
+import javafx.scene.paint.Color;
+import javafx.scene.shape.Circle;
 import javafx.util.Duration;
 
 import java.nio.file.Path;
@@ -50,6 +52,7 @@ public class BuyerDashboardController {
     @FXML private Label pageTitle;
     @FXML private Label welcomeLabel;
     @FXML private Button btnBrowse, btnDeals, btnHistory, btnFavourites, btnNotifications, btnProfile;
+    @FXML private Circle notifUnreadDot;
 
     private Button currentActiveBtn;
     private Page currentPage = Page.BROWSE;
@@ -85,14 +88,17 @@ public class BuyerDashboardController {
         User user = SessionManager.getCurrentUser();
         if (user != null) welcomeLabel.setText("Hello, " + user.getFullName());
         currentActiveBtn = btnBrowse;
+        ensureNotificationDot();
         returnTicker = new Timeline(new KeyFrame(Duration.seconds(1), event -> settleReturns()));
         returnTicker.setCycleCount(Timeline.INDEFINITE);
         returnTicker.play();
+        refreshNotificationDot();
         showBrowse();
     }
 
     private void settleReturns() {
         if (!SessionManager.isBuyer()) return;
+        refreshNotificationDot();
         try {
             int returned = DataService.settleExpiredBorrows();
             if (returned > 0 && (currentPage == Page.DEALS || currentPage == Page.HISTORY || currentPage == Page.BROWSE)) {
@@ -101,6 +107,36 @@ public class BuyerDashboardController {
         } catch (IllegalStateException | SecurityException ignored) {
             // The next user action reports a real session problem.
         }
+    }
+
+    private void ensureNotificationDot() {
+        if (notifUnreadDot != null) {
+            notifUnreadDot.toFront();
+            return;
+        }
+        if (btnNotifications == null || !(btnNotifications.getParent() instanceof StackPane host)) return;
+        notifUnreadDot = new Circle(6, Color.web("#e53935"));
+        notifUnreadDot.setStroke(Color.WHITE);
+        notifUnreadDot.setStrokeWidth(1.5);
+        notifUnreadDot.setMouseTransparent(true);
+        notifUnreadDot.setVisible(false);
+        StackPane.setAlignment(notifUnreadDot, Pos.TOP_RIGHT);
+        notifUnreadDot.setTranslateX(-14);
+        notifUnreadDot.setTranslateY(10);
+        host.getChildren().add(notifUnreadDot);
+    }
+
+    private void refreshNotificationDot() {
+        ensureNotificationDot();
+        if (notifUnreadDot == null) return;
+        boolean unread = false;
+        try {
+            unread = DataService.hasUnreadNotifications();
+        } catch (IllegalStateException | SecurityException ignored) {
+            unread = false;
+        }
+        notifUnreadDot.setVisible(unread);
+        if (unread) notifUnreadDot.toFront();
     }
 
     private void refreshCurrentPage() {
@@ -1166,16 +1202,19 @@ public class BuyerDashboardController {
                         footer
                 );
                 item.setOnMouseClicked(event -> {
+                    if (notification.isRead()) return;
                     try {
                         DataService.markBuyerNotificationRead(notification.getId());
-                        showNotifications();
-                        categories.setValue(selected);
+                        notification.setRead(true);
+                        item.setStyle(null);
+                        refreshNotificationDot();
                     } catch (IllegalStateException | SecurityException ex) {
                         alert(Alert.AlertType.ERROR, ex.getMessage());
                     }
                 });
                 list.getChildren().add(item);
             }
+            refreshNotificationDot();
         };
         categories.setOnAction(event -> render.run());
         root.getChildren().addAll(new HBox(8, new Label("Category"), categories), list);
@@ -1186,6 +1225,7 @@ public class BuyerDashboardController {
     private void openNotificationDeal(Notification notification, Map<String, Object> deal, String listingId) {
         try {
             DataService.markBuyerNotificationRead(notification.getId());
+            refreshNotificationDot();
         } catch (IllegalStateException | SecurityException ex) {
             alert(Alert.AlertType.ERROR, ex.getMessage());
             return;

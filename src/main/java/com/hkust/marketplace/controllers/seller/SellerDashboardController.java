@@ -5,11 +5,14 @@ import com.hkust.marketplace.utils.DataService;
 import com.hkust.marketplace.utils.DatabaseManager;
 import com.hkust.marketplace.utils.SceneManager;
 import com.hkust.marketplace.utils.SessionManager;
+import javafx.animation.KeyFrame;
+import javafx.animation.Timeline;
 import javafx.collections.FXCollections;
 import javafx.concurrent.Task;
 import javafx.fxml.FXML;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.util.Duration;
 import javafx.scene.chart.BarChart;
 import javafx.scene.chart.CategoryAxis;
 import javafx.scene.chart.NumberAxis;
@@ -20,6 +23,8 @@ import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.*;
+import javafx.scene.paint.Color;
+import javafx.scene.shape.Circle;
 import javafx.stage.FileChooser;
 
 import java.nio.file.Path;
@@ -38,16 +43,53 @@ public class SellerDashboardController {
     @FXML private Label pageTitle;
     @FXML private Label welcomeLabel;
     @FXML private Button btnListings, btnCreate, btnStats, btnReviews, btnNotifications, btnProfile;
+    @FXML private Circle notifUnreadDot;
 
     private Button currentActiveBtn;
     private String notificationCategory = "All";
+    private Timeline notificationTicker;
 
     @FXML
     public void initialize() {
         User user = SessionManager.getCurrentUser();
         if (user != null) welcomeLabel.setText("Hello, " + user.getFullName());
         currentActiveBtn = btnListings;
+        ensureNotificationDot();
+        notificationTicker = new Timeline(new KeyFrame(Duration.seconds(2), event -> refreshNotificationDot()));
+        notificationTicker.setCycleCount(Timeline.INDEFINITE);
+        notificationTicker.play();
+        refreshNotificationDot();
         showMyListings();
+    }
+
+    private void ensureNotificationDot() {
+        if (notifUnreadDot != null) {
+            notifUnreadDot.toFront();
+            return;
+        }
+        if (btnNotifications == null || !(btnNotifications.getParent() instanceof StackPane host)) return;
+        notifUnreadDot = new Circle(6, Color.web("#e53935"));
+        notifUnreadDot.setStroke(Color.WHITE);
+        notifUnreadDot.setStrokeWidth(1.5);
+        notifUnreadDot.setMouseTransparent(true);
+        notifUnreadDot.setVisible(false);
+        StackPane.setAlignment(notifUnreadDot, Pos.TOP_RIGHT);
+        notifUnreadDot.setTranslateX(-14);
+        notifUnreadDot.setTranslateY(10);
+        host.getChildren().add(notifUnreadDot);
+    }
+
+    private void refreshNotificationDot() {
+        ensureNotificationDot();
+        if (notifUnreadDot == null) return;
+        boolean unread = false;
+        try {
+            unread = DataService.hasUnreadNotifications();
+        } catch (IllegalStateException | SecurityException ignored) {
+            unread = false;
+        }
+        notifUnreadDot.setVisible(unread);
+        if (unread) notifUnreadDot.toFront();
     }
 
     private void setActive(Button btn, String title) {
@@ -942,11 +984,13 @@ public class SellerDashboardController {
                         footer
                 );
                 item.setOnMouseClicked(event -> {
+                    if (notification.isRead()) return;
                     if (!markNotificationRead(user, notification)) return;
-                    showNotifications();
+                    item.setStyle(null);
                 });
                 list.getChildren().add(item);
             }
+            refreshNotificationDot();
         };
         categories.setOnAction(event -> {
             notificationCategory = categories.getValue();
@@ -1004,6 +1048,7 @@ public class SellerDashboardController {
         try {
             DatabaseManager.markNotificationRead(user.getUsername(), notification.getId());
             notification.setRead(true);
+            refreshNotificationDot();
             return true;
         } catch (IllegalStateException e) {
             showProfileError("Could not mark notification as read: " + e.getMessage());

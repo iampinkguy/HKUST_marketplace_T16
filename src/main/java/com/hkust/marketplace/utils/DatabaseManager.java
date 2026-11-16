@@ -1839,6 +1839,23 @@ public class DatabaseManager {
         }
     }
 
+    public static boolean hasUnreadNotifications(String username) {
+        if (username == null || username.isBlank()) return false;
+        try (Connection connection = connect();
+             PreparedStatement statement = connection.prepareStatement("""
+                     SELECT 1 FROM notifications
+                     WHERE username = ? COLLATE NOCASE AND is_read = 0
+                     LIMIT 1
+                     """)) {
+            statement.setString(1, username);
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next();
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not check unread notifications", e);
+        }
+    }
+
     private static List<Map<String, Object>> fetchQuery(String sql, Object... parameters) {
         List<Map<String, Object>> rows = new ArrayList<>();
         try (Connection connection = connect();

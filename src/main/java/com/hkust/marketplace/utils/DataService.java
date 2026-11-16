@@ -931,6 +931,12 @@ public class DataService {
         return getNotificationsFor(buyer);
     }
 
+    public static boolean hasUnreadNotifications() {
+        User user = SessionManager.getCurrentUser();
+        if (user == null || !user.isActive()) return false;
+        return DatabaseManager.hasUnreadNotifications(user.getUsername());
+    }
+
     public static void markBuyerNotificationRead(String notificationId) {
         DatabaseManager.markNotificationRead(requireBuyer(), notificationId);
     }
