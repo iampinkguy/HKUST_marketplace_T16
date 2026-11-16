@@ -184,7 +184,7 @@ public class DataService {
                 new Notification("alice", "Offer Accepted", "Charlie accepted your offer of HK$160 for Calculus Textbook.", "Offer"),
                 new Notification("charlie", "New Offer Received", "Alice offered HK$160 for your Calculus Textbook.", "Offer"),
                 new Notification("diana", "Listing Pending", "Your Mini Fridge listing is awaiting admin review.", "System"),
-                new Notification("admin", "New Listing Submitted", "Diana submitted 'Mini Fridge' for review.", "System")
+                new Notification("admin", "New Listing Submitted", "Diana submitted 'Mini Fridge' for review.", "Listing Review")
         );
         Review review = new Review();
         review.setSellerUsername("charlie");
@@ -192,7 +192,8 @@ public class DataService {
         review.setListingTitle("Old Chemistry Book");
         review.setRating(5);
         review.setComment("Very smooth transaction, book in excellent condition!");
-        DatabaseManager.seedData(datasetKey, users, listings, List.of(deal), notifications, List.of(review));
+        DatabaseManager.seedData(datasetKey, users, listings, List.of(deal), notifications, List.of(review),
+                Map.of(notifications.get(3), "fridge"));
     }
 
     /** Loads persisted pending listings from SQLite. */
@@ -564,6 +565,28 @@ public class DataService {
         return notifications;
     }
 
+    /** Current admin's notification board, including stable ordering for equal timestamps. */
+    public static List<Notification> getAdminNotifications() {
+        String admin = requireAdmin();
+        List<Notification> notifications = new ArrayList<>(getNotificationsFor(admin));
+        notifications.sort(Comparator.comparing(Notification::getTimestamp,
+                Comparator.nullsFirst(Comparator.naturalOrder()))
+                .thenComparingLong(n -> Long.parseLong(n.getId())).reversed());
+        return notifications;
+    }
+
+    public static void markAdminNotificationRead(String notificationId) {
+        String admin = requireAdmin();
+        long id;
+        try { id = Long.parseLong(notificationId); }
+        catch (NumberFormatException e) { throw new IllegalArgumentException("Select a valid notification."); }
+        Map<String, Object> row = DatabaseManager.fetchRow("notifications", "notification_id", id);
+        if (row == null || !admin.equals(row.get("username"))) {
+            throw new IllegalArgumentException("Notification is no longer available.");
+        }
+        DatabaseManager.markNotificationRead(admin, notificationId);
+    }
+
     private static String requireAdmin() {
         User currentUser = SessionManager.getCurrentUser();
         if (currentUser == null || currentUser.getRole() != UserRole.ADMIN || !currentUser.isActive()) {
@@ -656,6 +679,7 @@ public class DataService {
         notification.setRead(((Number) row.get("is_read")).intValue() != 0);
         if (row.get("request_id") instanceof Number requestId) notification.setRequestId(requestId.intValue());
         if (row.get("listing_id") instanceof Number listingId) notification.setListingId(listingId.intValue());
+        notification.setTargetUsername((String) row.get("target_username"));
         return notification;
     }
 

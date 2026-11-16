@@ -189,6 +189,7 @@ public class DatabaseManager {
             """);
         migrateNotificationSchema();
         migrateBuyerDealColumns();
+        migrateAdminNotificationSchema();
         runSql("""
                 CREATE TABLE IF NOT EXISTS demo_data_seed (
                     dataset_key TEXT PRIMARY KEY, seeded_at TEXT NOT NULL
@@ -196,9 +197,74 @@ public class DatabaseManager {
                 """);
     }
 
+    /** Adds account links, atomic event notifications, and missing links for existing admin queues. */
+    private static void migrateAdminNotificationSchema() {
+        addColumnIfMissing("notifications", "target_username", "TEXT");
+        // Capture real profile/status changes from every role's existing update path.
+        // No profile values or credentials are copied into the notification body.
+        runSql("""
+                CREATE TRIGGER IF NOT EXISTS notify_admin_account_update
+                AFTER UPDATE OF full_name, password_hash, residence_hall, bio, preferred_meetup, active, role ON users
+                WHEN OLD.full_name IS NOT NEW.full_name OR OLD.password_hash IS NOT NEW.password_hash
+                    OR OLD.residence_hall IS NOT NEW.residence_hall OR OLD.bio IS NOT NEW.bio
+                    OR OLD.preferred_meetup IS NOT NEW.preferred_meetup OR OLD.active IS NOT NEW.active
+                    OR OLD.role IS NOT NEW.role
+                BEGIN
+                    INSERT INTO notifications (username, title, message, category, timestamp, target_username)
+                    SELECT username, 'User Account Updated', NEW.username ||
+                        CASE WHEN NEW.password_hash LIKE '!deleted-%' AND OLD.password_hash IS NOT NEW.password_hash
+                            THEN ' was permanently deleted.'
+                        WHEN OLD.active != NEW.active THEN
+                            CASE WHEN NEW.active = 1 THEN ' was activated.' ELSE ' was deactivated.' END
+                        ELSE ' updated account details.' END,
+                        'Account Update', strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime'), NEW.username
+                    FROM users WHERE role = 'ADMIN' AND active = 1;
+                END
+                """);
+        // A report and its admin notifications succeed or roll back together, including duplicate-report handling.
+        runSql("""
+                CREATE TRIGGER IF NOT EXISTS notify_admin_listing_report
+                AFTER INSERT ON listing_reports
+                BEGIN
+                    INSERT INTO notifications (username, sender, title, message, category, timestamp, listing_id)
+                    SELECT username, NEW.buyer_username, 'Listing Reported',
+                        NEW.buyer_username || ' reported listing #' || NEW.listing_id || ' for moderation.',
+                        'Listing Report', NEW.created_at, NEW.listing_id
+                    FROM users WHERE role = 'ADMIN' AND active = 1;
+                END
+                """);
+        // Existing queues get reliable ID-based links; legacy notification text is preserved without guessing a target.
+        runSql("""
+                INSERT INTO notifications (username, title, message, category, timestamp, listing_id)
+                SELECT a.username, 'Listing Awaiting Review', 'Review ' || l.item_name || ' (#' || l.listing_id || ').',
+                    'Listing Review', COALESCE(l.submitted_at, strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime')), l.listing_id
+                FROM users a CROSS JOIN listings l
+                WHERE a.role = 'ADMIN' AND a.active = 1 AND l.listing_status = 'PENDING_REVIEW'
+                    AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.username = a.username
+                        AND n.listing_id = l.listing_id AND n.category = 'Listing Review')
+                """);
+        runSql("""
+                INSERT INTO notifications (username, sender, title, message, category, timestamp, listing_id)
+                SELECT a.username, r.buyer_username, 'Listing Reported',
+                    r.buyer_username || ' reported listing #' || r.listing_id || ' for moderation.',
+                    'Listing Report', r.created_at, r.listing_id
+                FROM users a CROSS JOIN listing_reports r JOIN listings l ON l.listing_id = r.listing_id
+                WHERE a.role = 'ADMIN' AND a.active = 1
+                    AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.username = a.username
+                        AND n.sender = r.buyer_username AND n.listing_id = r.listing_id AND n.category = 'Listing Report')
+                """);
+    }
+
     /** Writes the dataset atomically; the version marker prevents startup from recreating edited/deleted samples. */
     public static void seedData(String datasetKey, List<User> users, List<Listing> listings, List<Deal> deals,
                                 List<Notification> notifications, List<Review> reviews) {
+        seedData(datasetKey, users, listings, deals, notifications, reviews, Map.of());
+    }
+
+    /** Resolves optional notification listing keys to actual generated IDs inside the seed transaction. */
+    public static void seedData(String datasetKey, List<User> users, List<Listing> listings, List<Deal> deals,
+                                List<Notification> notifications, List<Review> reviews,
+                                Map<Notification, String> notificationListingKeys) {
         try (Connection connection = connect()) {
             connection.setAutoCommit(false);
             try {
@@ -288,11 +354,14 @@ public class DatabaseManager {
                     String recipient = accounts.get(notification.getUsername());
                     if (recipient == null) continue;
                     if ("Offer".equals(notification.getCategory()) && !offerRecipients.contains(recipient)) continue;
-                    if ("System".equals(notification.getCategory()) && !pendingRecipients.contains(recipient)) continue;
+                    if (("System".equals(notification.getCategory()) || "Listing Review".equals(notification.getCategory()))
+                            && !pendingRecipients.contains(recipient)) continue;
                     if (seedId(connection, "SELECT 1 FROM notifications WHERE username = ? AND title = ? AND message = ? AND category = ? LIMIT 1",
                             recipient, notification.getTitle(), notification.getMessage(), notification.getCategory()) == null) {
-                        insertSeedRow(connection, "notifications", "username, title, message, category, timestamp",
-                                recipient, notification.getTitle(), notification.getMessage(), notification.getCategory(), notification.getTimestamp().toString());
+                        String listingKey = notificationListingKeys.get(notification);
+                        insertSeedRow(connection, "notifications", "username, title, message, category, timestamp, listing_id",
+                                recipient, notification.getTitle(), notification.getMessage(), notification.getCategory(), notification.getTimestamp().toString(),
+                                listingKey == null ? null : listingIds.get(listingKey));
                     }
                 }
                 insertSeedRow(connection, "demo_data_seed", "dataset_key, seeded_at", datasetKey, LocalDateTime.now().toString());
@@ -775,13 +844,14 @@ public class DatabaseManager {
                 }
 
                 try (PreparedStatement statement = connection.prepareStatement("""
-                        INSERT INTO notifications (username, sender, title, message, category, timestamp)
-                        SELECT username, ?, 'New Listing Submitted', ?, 'System', ?
+                        INSERT INTO notifications (username, sender, title, message, category, timestamp, listing_id)
+                        SELECT username, ?, 'New Listing Submitted', ?, 'Listing Review', ?, ?
                         FROM users WHERE role = 'ADMIN' AND active = 1
                         """)) {
                     statement.setString(1, canonicalUsername);
                     statement.setString(2, sellerName + " submitted '" + listing.getTitle() + "' for review.");
                     statement.setString(3, submittedAt.toString());
+                    statement.setInt(4, listingId);
                     if (statement.executeUpdate() == 0) {
                         throw new IllegalStateException("No active admin account is available to notify.");
                     }
@@ -915,13 +985,14 @@ public class DatabaseManager {
                 }
 
                 try (PreparedStatement statement = connection.prepareStatement("""
-                        INSERT INTO notifications (username, sender, title, message, category, timestamp)
-                        SELECT username, ?, 'Listing Updated - Review Required', ?, 'System', ?
+                        INSERT INTO notifications (username, sender, title, message, category, timestamp, listing_id)
+                        SELECT username, ?, 'Listing Updated - Review Required', ?, 'Listing Review', ?, ?
                         FROM users WHERE role = 'ADMIN' AND active = 1
                         """)) {
                     statement.setString(1, canonicalUsername);
                     statement.setString(2, sellerName + " updated '" + listing.getTitle() + "' and it is awaiting re-approval.");
                     statement.setString(3, submittedAt.toString());
+                    statement.setInt(4, listingId);
                     if (statement.executeUpdate() == 0) {
                         throw new IllegalStateException("No active admin account is available to notify.");
                     }
