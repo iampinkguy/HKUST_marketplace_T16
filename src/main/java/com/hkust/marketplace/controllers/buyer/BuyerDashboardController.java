@@ -13,6 +13,7 @@ import com.hkust.marketplace.utils.SessionManager;
 import javafx.animation.KeyFrame;
 import javafx.animation.Timeline;
 import javafx.collections.FXCollections;
+import javafx.event.ActionEvent;
 import javafx.fxml.FXML;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -27,14 +28,15 @@ import javafx.util.Duration;
 import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
-import java.time.format.DateTimeParseException;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -174,12 +176,20 @@ public class BuyerDashboardController {
             live = List.of();
             root.getChildren().add(errorLabel(ex.getMessage()));
         }
+        Set<Integer> favouriteIds;
+        try {
+            favouriteIds = new HashSet<>(DataService.getBuyerFavouriteIds());
+        } catch (IllegalStateException | SecurityException ex) {
+            favouriteIds = Set.of();
+        }
         if (live.isEmpty()) {
             Label empty = new Label("No live listings match the current search.");
             empty.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 15px;");
             root.getChildren().addAll(tools, summary, empty);
         } else {
-            for (Listing listing : live) grid.getChildren().add(createListingCard(listing));
+            for (Listing listing : live) {
+                grid.getChildren().add(createListingCard(listing, favouriteIds.contains(Integer.parseInt(listing.getId()))));
+            }
             root.getChildren().addAll(tools, summary, grid);
         }
         return scroll(root);
@@ -247,7 +257,7 @@ public class BuyerDashboardController {
         });
     }
 
-    private VBox createListingCard(Listing listing) {
+    private VBox createListingCard(Listing listing, boolean favourited) {
         VBox card = new VBox(8);
         card.getStyleClass().add("listing-card");
         card.setPrefWidth(260);
@@ -272,9 +282,11 @@ public class BuyerDashboardController {
         else typeBadge.getStyleClass().add("badge-live");
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
+        Button heart = heartButton(listing, favourited);
+        heart.addEventFilter(MouseEvent.MOUSE_CLICKED, MouseEvent::consume);
         Label price = new Label(listing.getPriceDisplay());
         price.setStyle("-fx-font-weight: bold; -fx-text-fill: #003974; -fx-font-size: 16px;");
-        top.getChildren().addAll(typeBadge, spacer, price);
+        top.getChildren().addAll(typeBadge, spacer, heart, price);
 
         card.getChildren().addAll(thumb, top,
                 styled(listing.getTitle(), "-fx-font-weight: bold; -fx-font-size: 15px; -fx-text-fill: #1a1a2e;"),
@@ -283,6 +295,10 @@ public class BuyerDashboardController {
                 styled("Meet-up: " + text(listing.getMeetupLocation()), muted()),
                 styled("Posted: " + formatDate(listing.getPostedAt()), faint()),
                 styled("Status: " + text(listing.getAvailabilityStatus()), muted()));
+        if (listing.getType() == ListingType.LEND) {
+            card.getChildren().add(card.getChildren().size() - 1,
+                    styled("Lending period: " + lendingPeriodText(listing.getLendingDays()), muted()));
+        }
         return card;
     }
 
@@ -327,7 +343,9 @@ public class BuyerDashboardController {
                 default -> showBrowse();
             }
         });
-        header.getChildren().addAll(styled(listing.getTitle(), "-fx-font-size: 22px; -fx-font-weight: bold;"), spacer, close);
+        header.getChildren().addAll(
+                styled(listing.getTitle(), "-fx-font-size: 22px; -fx-font-weight: bold;"),
+                heartButton(listing, isFavourited(listing)), spacer, close);
 
         FlowPane photos = new FlowPane(10, 10);
         photos.setPrefWrapLength(880);
@@ -370,6 +388,9 @@ public class BuyerDashboardController {
                 fact("Seller", text(listing.getSellerFullName()) + " · "
                         + String.format(Locale.ROOT, "%.1f", average) + " / 5 (" + count + " ratings)")
         );
+        if (listing.getType() == ListingType.LEND) {
+            facts.getChildren().add(3, fact("Lending period", lendingPeriodText(listing.getLendingDays())));
+        }
 
         VBox reviews = new VBox(6);
         reviews.getChildren().add(styled("Seller reviews", "-fx-font-weight: bold;"));
@@ -496,35 +517,77 @@ public class BuyerDashboardController {
     }
 
     private void borrowPeriod(Listing listing, Runnable afterSuccess) {
+        Integer lendingDays = listing.getLendingDays();
+        if (lendingDays == null || lendingDays <= 0) {
+            alert(Alert.AlertType.ERROR, "This listing does not have a lending period.");
+            return;
+        }
         Dialog<ButtonType> dialog = new Dialog<>();
         dialog.setTitle("Borrow Request");
         dialog.setHeaderText("Request to borrow: " + listing.getTitle());
         dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
-        LocalDateTime startDefault = LocalDateTime.now().withNano(0);
-        LocalDateTime endDefault = startDefault.plusSeconds(5);
-        DatePicker startDate = new DatePicker(startDefault.toLocalDate());
-        TextField startTime = new TextField(startDefault.toLocalTime().format(DateTimeFormatter.ofPattern("HH:mm:ss")));
-        DatePicker endDate = new DatePicker(endDefault.toLocalDate());
-        TextField endTime = new TextField(endDefault.toLocalTime().format(DateTimeFormatter.ofPattern("HH:mm:ss")));
+        LocalDate today = LocalDate.now();
+        DatePicker startDate = new DatePicker(today);
+        DatePicker endDate = new DatePicker(today.plusDays(1));
+        Label lengthLabel = new Label();
+        lengthLabel.setWrapText(true);
+        Runnable showLength = () -> {
+            String error = borrowDateError(startDate.getValue(), endDate.getValue(), lendingDays);
+            if (error != null) {
+                lengthLabel.setText(error);
+                return;
+            }
+            long days = ChronoUnit.DAYS.between(startDate.getValue(), endDate.getValue());
+            lengthLabel.setText(lendingPeriodText((int) days) + " selected. You can borrow for 1 to "
+                    + lendingPeriodText(lendingDays) + ".");
+        };
+        startDate.valueProperty().addListener((obs, oldValue, newValue) -> showLength.run());
+        endDate.valueProperty().addListener((obs, oldValue, newValue) -> showLength.run());
+        showLength.run();
         dialog.getDialogPane().setContent(new VBox(8,
-                new Label("The shortest borrow period is 5 seconds."),
-                new Label("Start date and time (HH:mm:ss)"), new HBox(8, startDate, startTime),
-                new Label("End date and time (HH:mm:ss)"), new HBox(8, endDate, endTime)));
+                new Label("The seller lends this item for up to " + lendingPeriodText(lendingDays) + "."),
+                new Label("Start date"), startDate,
+                new Label("End date"), endDate,
+                lengthLabel));
+        Button ok = (Button) dialog.getDialogPane().lookupButton(ButtonType.OK);
+        ok.addEventFilter(ActionEvent.ACTION, event -> {
+            String error = borrowDateError(startDate.getValue(), endDate.getValue(), lendingDays);
+            if (error == null) return;
+            event.consume();
+            alert(Alert.AlertType.ERROR, error);
+        });
         dialog.showAndWait().ifPresent(response -> {
             if (response != ButtonType.OK) return;
             try {
-                LocalDateTime start = readDateTime(startDate, startTime, "Start");
-                LocalDateTime end = readDateTime(endDate, endTime, "End");
-                DataService.submitBorrowRequest(listing.getId(), start, end);
+                LocalDate start = startDate.getValue();
+                LocalDate end = endDate.getValue();
+                long days = ChronoUnit.DAYS.between(start, end);
+                DataService.submitBorrowRequest(listing.getId(), start.atStartOfDay(), end.atStartOfDay());
                 DataService.sendBuyerListingChatMessage(listing.getId(),
-                        "[Formal borrow request] " + start.toString().replace('T', ' ')
-                                + " to " + end.toString().replace('T', ' '));
+                        "[Formal borrow request] " + start + " to " + end
+                                + " (" + lendingPeriodText((int) days) + ")");
                 alert(Alert.AlertType.INFORMATION, "Your borrow request was sent to " + listing.getSellerFullName() + ".");
                 if (afterSuccess != null) afterSuccess.run();
             } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
                 alert(Alert.AlertType.ERROR, ex.getMessage());
             }
         });
+    }
+
+    private String borrowDateError(LocalDate start, LocalDate end, int lendingDays) {
+        if (start == null || end == null) return "Choose a start date and an end date.";
+        if (start.isBefore(LocalDate.now())) return "Borrow start date cannot be in the past.";
+        long days = ChronoUnit.DAYS.between(start, end);
+        if (days < 1) return "Borrow at least 1 day.";
+        if (days > lendingDays) {
+            return "You can borrow this item for at most " + lendingPeriodText(lendingDays) + ".";
+        }
+        return null;
+    }
+
+    private String lendingPeriodText(Integer days) {
+        if (days == null || days <= 0) return "Not set";
+        return days == 1 ? "1 day" : days + " days";
     }
 
     private void claimItem(Listing listing, Runnable afterSuccess) {
@@ -715,7 +778,7 @@ public class BuyerDashboardController {
         card.getChildren().addAll(
                 styled(textValue(deal.get("item_name")), "-fx-font-weight: bold; -fx-font-size: 15px;"),
                 styled("Seller: " + textValue(deal.get("seller_name")) + " · " + details, muted()),
-                styled("Status: " + status + (deal.get("due_at") == null ? "" : " · Due " + textValue(deal.get("due_at")).replace('T', ' ')), muted())
+                styled("Status: " + status + (deal.get("due_at") == null ? "" : " · Due " + dateOnly(deal.get("due_at"))), muted())
         );
         HBox actions = new HBox(8);
         if (deal.get("listing_id") != null) {
@@ -984,6 +1047,41 @@ public class BuyerDashboardController {
         return card;
     }
 
+    private Button heartButton(Listing listing, boolean favourited) {
+        Button heart = new Button();
+        heart.setFocusTraversable(false);
+        styleHeart(heart, favourited);
+        heart.setOnAction(event -> toggleFavourite(listing, heart));
+        return heart;
+    }
+
+    private void styleHeart(Button heart, boolean favourited) {
+        heart.setText(favourited ? "♥" : "♡");
+        heart.setStyle(favourited
+                ? "-fx-background-color: transparent; -fx-text-fill: #c62828; -fx-font-size: 18px; -fx-cursor: hand;"
+                : "-fx-background-color: transparent; -fx-text-fill: #9aa0b0; -fx-font-size: 18px; -fx-cursor: hand;");
+    }
+
+    private boolean isFavourited(Listing listing) {
+        try {
+            return DataService.getBuyerFavouriteIds().contains(Integer.parseInt(listing.getId()));
+        } catch (IllegalStateException | SecurityException | NumberFormatException ex) {
+            return false;
+        }
+    }
+
+    private void toggleFavourite(Listing listing, Button heart) {
+        boolean favourite = "♡".equals(heart.getText());
+        try {
+            DataService.setBuyerFavourite(listing.getId(), favourite);
+            styleHeart(heart, favourite);
+            if (currentPage == Page.BROWSE) showBrowse();
+            else if (currentPage == Page.FAVOURITES) showFavourites();
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+            alert(Alert.AlertType.ERROR, ex.getMessage());
+        }
+    }
+
     private Label badge(String text, String styleClass) {
         Label label = new Label(text);
         label.getStyleClass().addAll("badge", styleClass);
@@ -997,15 +1095,16 @@ public class BuyerDashboardController {
         VBox root = new VBox(16);
         root.setPadding(new Insets(4));
         FlowPane grid = new FlowPane(16, 16);
-        User user = SessionManager.getCurrentUser();
-        List<Listing> favourites = user == null ? List.of() : DatabaseManager.fetchFavouriteListings(user.getUsername());
-        List<Integer> hidden = user == null ? List.of() : DatabaseManager.fetchReportedListingIds(user.getUsername());
-        favourites = favourites.stream()
-                .filter(listing -> !hidden.contains(Integer.parseInt(listing.getId())))
-                .toList();
+        List<Listing> favourites;
+        try {
+            favourites = DataService.getBuyerFavouriteListings();
+        } catch (IllegalStateException | SecurityException ex) {
+            alert(Alert.AlertType.ERROR, ex.getMessage());
+            favourites = List.of();
+        }
         if (favourites.isEmpty()) root.getChildren().add(new Label("No favourite listings yet."));
         else {
-            for (Listing listing : favourites) grid.getChildren().add(createListingCard(listing));
+            for (Listing listing : favourites) grid.getChildren().add(createListingCard(listing, true));
             root.getChildren().add(grid);
         }
         contentPane.getChildren().setAll(scroll(root));
@@ -1231,16 +1330,6 @@ public class BuyerDashboardController {
         dialog.showAndWait();
     }
 
-    private LocalDateTime readDateTime(DatePicker date, TextField time, String label) {
-        if (date.getValue() == null) throw new IllegalArgumentException(label + " date is required.");
-        String clock = time.getText() == null || time.getText().isBlank() ? "00:00:00" : time.getText().trim();
-        try {
-            return LocalDateTime.of(date.getValue(), LocalTime.parse(clock));
-        } catch (DateTimeParseException ex) {
-            throw new IllegalArgumentException(label + " time must use HH:mm:ss.");
-        }
-    }
-
     private LocalDate parseDealDate(Map<String, Object> deal) {
         String raw = deal.get("completed_at") != null ? deal.get("completed_at").toString()
                 : deal.get("returned_at") == null ? null : deal.get("returned_at").toString();
@@ -1313,7 +1402,14 @@ public class BuyerDashboardController {
 
     private String formatRange(Object start, Object end) {
         if (start == null || end == null) return "dates to be confirmed";
-        return start.toString().replace('T', ' ') + " → " + end.toString().replace('T', ' ');
+        return dateOnly(start) + " → " + dateOnly(end);
+    }
+
+    private String dateOnly(Object value) {
+        String text = value.toString();
+        int split = text.indexOf('T');
+        if (split < 0) split = text.indexOf(' ');
+        return split > 0 ? text.substring(0, split) : text;
     }
 
     private Double parseOptionalPrice(String raw, String label) {

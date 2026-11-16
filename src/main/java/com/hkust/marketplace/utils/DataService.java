@@ -851,6 +851,29 @@ public class DataService {
         DatabaseManager.reportListing(buyer, parseListingId(listingId));
     }
 
+    public static List<Integer> getBuyerFavouriteIds() {
+        return DatabaseManager.fetchFavouriteListingIds(requireBuyer());
+    }
+
+    public static void setBuyerFavourite(String listingId, boolean favourite) {
+        String buyer = requireBuyer();
+        int id = parseListingId(listingId);
+        if (DatabaseManager.fetchRow("listings", "listing_id", id) == null) {
+            throw new IllegalArgumentException("Listing was not found.");
+        }
+        DatabaseManager.setFavourite(buyer, id, favourite);
+    }
+
+    public static List<Listing> getBuyerFavouriteListings() {
+        String buyer = requireBuyer();
+        List<Integer> hidden = DatabaseManager.fetchReportedListingIds(buyer);
+        List<Listing> favourites = new ArrayList<>();
+        for (Listing listing : DatabaseManager.fetchFavouriteListings(buyer)) {
+            if (!hidden.contains(Integer.parseInt(listing.getId()))) favourites.add(listing);
+        }
+        return favourites;
+    }
+
     public static int submitBorrowRequest(String listingId, LocalDateTime start, LocalDateTime end) {
         String buyer = requireBuyer();
         int id = parseListingId(listingId);
