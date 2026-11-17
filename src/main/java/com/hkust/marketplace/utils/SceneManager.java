@@ -67,7 +67,7 @@ public class SceneManager {
                 alert.setTitle("Navigation Error");
                 alert.setHeaderText("Could not open screen");
                 alert.setContentText(msg);
-                alert.showAndWait();
+                DialogStyle.showAndWait(alert);
             } catch (Exception ignored) {
                 // If even the alert fails, at least we printed to console
             }

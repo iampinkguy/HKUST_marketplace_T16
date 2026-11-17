@@ -3,6 +3,7 @@ package com.hkust.marketplace.controllers.seller;
 import com.hkust.marketplace.models.*;
 import com.hkust.marketplace.utils.DataService;
 import com.hkust.marketplace.utils.DatabaseManager;
+import com.hkust.marketplace.utils.DialogStyle;
 import com.hkust.marketplace.utils.SceneManager;
 import com.hkust.marketplace.utils.SessionManager;
 import javafx.animation.KeyFrame;
@@ -171,11 +172,11 @@ public class SellerDashboardController {
             Alert conf = new Alert(Alert.AlertType.CONFIRMATION,
                     "Permanently delete '" + l.getTitle() + "'?", ButtonType.CANCEL, ButtonType.OK);
             conf.setHeaderText("Delete listing");
-            conf.showAndWait().ifPresent(r -> {
+            DialogStyle.showAndWait(conf).ifPresent(r -> {
                 if (r == ButtonType.OK) {
                     try {
                         DataService.deleteSellerListing(l.getId(), l.getReviewVersion());
-                        new Alert(Alert.AlertType.INFORMATION, "Listing deleted successfully.").showAndWait();
+                        DialogStyle.showAndWait(new Alert(Alert.AlertType.INFORMATION, "Listing deleted successfully."));
                         showMyListings();
                     } catch (IllegalStateException | SecurityException ex) {
                         showProfileError("Could not delete listing: " + ex.getMessage());
@@ -278,7 +279,7 @@ public class SellerDashboardController {
                     .distinct()
                     .toList();
             if (selectedPhotos.size() + newPhotos.size() > 6) {
-                new Alert(Alert.AlertType.WARNING, "You can upload a maximum of 6 photos.").showAndWait();
+                DialogStyle.showAndWait(new Alert(Alert.AlertType.WARNING, "You can upload a maximum of 6 photos."));
                 return;
             }
             selectedPhotos.addAll(newPhotos);
@@ -332,8 +333,8 @@ public class SellerDashboardController {
                 }
             }
             if (!valid) {
-                new Alert(Alert.AlertType.WARNING,
-                        "Complete all required fields. Enter a non-negative price for Sell or a positive duration for Lend.").showAndWait();
+                DialogStyle.showAndWait(new Alert(Alert.AlertType.WARNING,
+                        "Complete all required fields. Enter a non-negative price for Sell or a positive duration for Lend."));
                 return;
             }
 
@@ -370,11 +371,11 @@ public class SellerDashboardController {
             };
             saveTask.setOnSucceeded(event -> {
                 if (editing) {
-                    new Alert(Alert.AlertType.INFORMATION,
-                            "Changes saved. Your listing is Pending Review until an admin re-approves it.").showAndWait();
+                    DialogStyle.showAndWait(new Alert(Alert.AlertType.INFORMATION,
+                            "Changes saved. Your listing is Pending Review until an admin re-approves it."));
                 } else {
-                    new Alert(Alert.AlertType.INFORMATION,
-                            "Listing submitted successfully. Status: Pending Review.\nAn admin has been notified.").showAndWait();
+                    DialogStyle.showAndWait(new Alert(Alert.AlertType.INFORMATION,
+                            "Listing submitted successfully. Status: Pending Review.\nAn admin has been notified."));
                 }
                 showMyListings();
             });
@@ -385,7 +386,7 @@ public class SellerDashboardController {
                 String message = error == null || error.getMessage() == null
                         ? "An unexpected error occurred."
                         : error.getMessage();
-                new Alert(Alert.AlertType.ERROR, "Could not save listing: " + message).showAndWait();
+                DialogStyle.showAndWait(new Alert(Alert.AlertType.ERROR, "Could not save listing: " + message));
             });
             Thread saveThread = new Thread(saveTask, "seller-listing-save");
             saveThread.setDaemon(true);
@@ -523,13 +524,13 @@ public class SellerDashboardController {
                         + "' as complete? The listing finishes only after both you and the buyer mark complete.",
                 ButtonType.CANCEL, ButtonType.OK);
         conf.setHeaderText("Mark listing complete");
-        conf.showAndWait().ifPresent(response -> {
+        DialogStyle.showAndWait(conf).ifPresent(response -> {
             if (response != ButtonType.OK) return;
             try {
                 boolean fullyDone = DataService.completeSellerListing(listing.getId(), listing.getReviewVersion());
-                new Alert(Alert.AlertType.INFORMATION, fullyDone
+                DialogStyle.showAndWait(new Alert(Alert.AlertType.INFORMATION, fullyDone
                         ? "Both sides marked complete. The listing is finished."
-                        : "Your completion is saved. Waiting for the buyer to mark complete.").showAndWait();
+                        : "Your completion is saved. Waiting for the buyer to mark complete."));
                 if (fullyDone) showMyListings();
                 else showListingDetails(listing, false);
             } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
@@ -549,7 +550,7 @@ public class SellerDashboardController {
         VBox chat = createSellerListingChat(listing, buyerUsername);
         chat.setPrefWidth(480);
         dialog.getDialogPane().setContent(chat);
-        dialog.showAndWait();
+        DialogStyle.showAndWait(dialog);
     }
 
     private Label fact(String name, String value) {
@@ -576,6 +577,8 @@ public class SellerDashboardController {
         ComboBox<String> buyerSelector = new ComboBox<>();
         buyerSelector.setPromptText("Select buyer conversation");
         buyerSelector.setMaxWidth(Double.MAX_VALUE);
+        TextField search = new TextField();
+        search.setPromptText("Search this chat history");
         ListView<Message> messages = new ListView<>();
         messages.setPrefHeight(220);
         messages.setCellFactory(view -> new ListCell<>() {
@@ -586,7 +589,8 @@ public class SellerDashboardController {
                     setText(null);
                 } else {
                     String timestamp = message.getTimestamp() == null ? ""
-                            : message.getTimestamp().format(DateTimeFormatter.ofPattern("dd MMM HH:mm", Locale.ENGLISH));
+                            : message.getTimestamp().format(
+                            DateTimeFormatter.ofPattern("dd MMM HH:mm:ss", Locale.ENGLISH));
                     setText(message.getSender_id() + " (" + timestamp + ")\n" + message.getContent());
                     setWrapText(true);
                 }
@@ -611,13 +615,26 @@ public class SellerDashboardController {
                     return;
                 }
                 ChatHistory history = DataService.getSellerListingChat(listing.getId(), buyer);
-                messages.getItems().setAll(history == null || history.getMessages() == null
-                        ? List.of() : history.getMessages());
+                List<Message> loaded = history == null || history.getMessages() == null
+                        ? List.of() : history.getMessages();
+                String needle = search.getText() == null ? "" : search.getText().trim().toLowerCase(Locale.ROOT);
+                if (!needle.isEmpty()) {
+                    loaded = loaded.stream()
+                            .filter(message -> message.getContent() != null
+                                    && message.getContent().toLowerCase(Locale.ROOT).contains(needle))
+                            .toList();
+                }
+                messages.getItems().setAll(loaded);
                 if (!messages.getItems().isEmpty()) {
                     messages.scrollTo(messages.getItems().size() - 1);
                 }
-                feedback.setText(messages.getItems().isEmpty()
-                        ? "No messages in this conversation yet." : "");
+                if (loaded.isEmpty()) {
+                    feedback.setText(needle.isEmpty()
+                            ? "No messages in this conversation yet."
+                            : "No messages match this search.");
+                } else {
+                    feedback.setText("");
+                }
             } catch (IllegalStateException | SecurityException e) {
                 feedback.setText("Could not load chat: " + e.getMessage());
             }
@@ -646,6 +663,7 @@ public class SellerDashboardController {
         };
         buyerSelector.valueProperty().addListener((observable, oldValue, newValue) ->
                 reloadMessages.run());
+        search.textProperty().addListener((obs, old, value) -> reloadMessages.run());
         refresh.setOnAction(event -> reloadBuyers.run());
         send.setOnAction(event -> {
             try {
@@ -661,8 +679,15 @@ public class SellerDashboardController {
                 feedback.setText("Could not send message: " + e.getMessage());
             }
         });
-        chat.getChildren().addAll(new Label("Buyer"), buyerSelector, messages, feedback,
-                input, new HBox(8, refresh, send));
+        chat.getChildren().addAll(
+                new Label("Buyer"),
+                buyerSelector,
+                new Label("Chat history is kept. Search does not delete messages."),
+                search,
+                messages,
+                feedback,
+                input,
+                new HBox(8, refresh, send));
         reloadBuyers.run();
         return chat;
     }
@@ -753,7 +778,7 @@ public class SellerDashboardController {
                     enlargedImage.setFitWidth(640);
                     enlargedImage.setFitHeight(480);
                     fullPhoto.getDialogPane().setContent(enlargedImage);
-                    fullPhoto.showAndWait();
+                    DialogStyle.showAndWait(fullPhoto);
                 });
                 gallery.getChildren().add(photo);
             } catch (IllegalArgumentException ex) {
@@ -987,7 +1012,7 @@ public class SellerDashboardController {
             hint.setWrapText(true);
             dialog.getDialogPane().setContent(new VBox(8, hint, input));
             dialog.setResultConverter(button -> button);
-            var result = dialog.showAndWait();
+            var result = DialogStyle.showAndWait(dialog);
             if (result.isEmpty() || result.get() != ButtonType.OK) {
                 showReviews();
                 return;
@@ -995,13 +1020,13 @@ public class SellerDashboardController {
             draft = input.getText() == null ? "" : input.getText();
             try {
                 DataService.replyToReview(review.getBuyerUsername(), review.getId(), draft);
-                new Alert(Alert.AlertType.INFORMATION,
-                        "Reply submitted. The buyer has been notified.").showAndWait();
+                DialogStyle.showAndWait(new Alert(Alert.AlertType.INFORMATION,
+                        "Reply submitted. The buyer has been notified."));
                 showReviews();
                 return;
             } catch (IllegalArgumentException ex) {
-                new Alert(Alert.AlertType.ERROR,
-                        "A reply cannot be empty. Please enter a written reply.").showAndWait();
+                DialogStyle.showAndWait(new Alert(Alert.AlertType.ERROR,
+                        "A reply cannot be empty. Please enter a written reply."));
             } catch (IllegalStateException | SecurityException ex) {
                 showProfileError(ex.getMessage());
                 showReviews();
@@ -1016,15 +1041,15 @@ public class SellerDashboardController {
                         + " as inappropriate? An admin will be notified for moderation.",
                 ButtonType.CANCEL, ButtonType.OK);
         confirm.setHeaderText("Confirm flag");
-        confirm.showAndWait().ifPresent(response -> {
+        DialogStyle.showAndWait(confirm).ifPresent(response -> {
             if (response != ButtonType.OK) {
                 showReviews();
                 return;
             }
             try {
                 DataService.flagReview(review.getBuyerUsername(), review.getId());
-                new Alert(Alert.AlertType.INFORMATION,
-                        "Review flagged. The report was sent to admin for moderation.").showAndWait();
+                DialogStyle.showAndWait(new Alert(Alert.AlertType.INFORMATION,
+                        "Review flagged. The report was sent to admin for moderation."));
                 showReviews();
             } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
                 showProfileError(ex.getMessage());
@@ -1251,11 +1276,11 @@ public class SellerDashboardController {
         user.setPreferredMeetup(updatedMeetup);
         if (passwordHash != null) user.setPasswordHash(passwordHash);
         welcomeLabel.setText("Hello, " + fullName);
-        new Alert(Alert.AlertType.INFORMATION, "Profile updated successfully.").showAndWait();
+        DialogStyle.showAndWait(new Alert(Alert.AlertType.INFORMATION, "Profile updated successfully."));
     }
 
     private void showProfileError(String message) {
-        new Alert(Alert.AlertType.ERROR, message).showAndWait();
+        DialogStyle.showAndWait(new Alert(Alert.AlertType.ERROR, message));
     }
 
     @FXML

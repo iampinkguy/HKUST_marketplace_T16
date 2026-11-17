@@ -2,6 +2,7 @@ package com.hkust.marketplace.controllers.admin;
 
 import com.hkust.marketplace.models.*;
 import com.hkust.marketplace.utils.DataService;
+import com.hkust.marketplace.utils.DialogStyle;
 import com.hkust.marketplace.utils.SceneManager;
 import com.hkust.marketplace.utils.SessionManager;
 import javafx.animation.KeyFrame;
@@ -145,52 +146,108 @@ public class AdminDashboardController {
         Button review = new Button("Review details");
         review.setId("review-listing-" + l.getId());
         review.getStyleClass().addAll("btn-primary", "btn-sm");
-        review.setOnAction(event -> showListingDetails(l));
+        review.setOnAction(event -> showListingDetails(l, false));
         card.getChildren().addAll(title, meta, submitted, createPhotoGallery(l.getPhotoPaths(), true), review);
         return card;
     }
 
     private void showListingDetails(Listing queued) {
+        showListingDetails(queued, false);
+    }
+
+    private void showListingDetails(Listing queued, boolean fromNotification) {
         Listing listing;
         try {
             listing = DataService.getListingForReview(queued.getId(), queued.getReviewVersion());
         } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
             showReviewFailure(queued, ex);
-            showReview();
+            if (fromNotification) showNotifications();
+            else showReview();
             return;
         }
-        Dialog<ButtonType> details = new Dialog<>();
-        details.setTitle("Review Listing");
-        details.setHeaderText(listing.getTitle() + " (#" + listing.getId() + ")");
-        details.setResizable(true);
-        VBox body = new VBox(12);
-        body.setPadding(new Insets(12));
-        Label fields = new Label(listingDetailsText(listing));
-        fields.setWrapText(true);
-        body.getChildren().addAll(fields, new Label("Photos — select a photo to view it at full size"),
-                createPhotoGallery(listing.getPhotoPaths(), false));
-        ScrollPane scroll = new ScrollPane(body);
-        scroll.setFitToWidth(true);
-        scroll.setPrefViewportWidth(720);
-        scroll.setPrefViewportHeight(520);
-        details.getDialogPane().setContent(scroll);
-        ButtonType approve = new ButtonType("Approve", ButtonBar.ButtonData.OK_DONE);
-        ButtonType reject = new ButtonType("Reject", ButtonBar.ButtonData.OTHER);
-        details.getDialogPane().getButtonTypes().addAll(approve, reject, ButtonType.CANCEL);
-        details.getDialogPane().lookupButton(approve).setId("approve-listing");
-        details.getDialogPane().lookupButton(reject).setId("reject-listing");
-        details.getDialogPane().lookupButton(approve).addEventFilter(ActionEvent.ACTION, event -> {
-            event.consume();
-            confirmListingDecision(details, listing, true);
-        });
-        details.getDialogPane().lookupButton(reject).addEventFilter(ActionEvent.ACTION, event -> {
-            event.consume();
-            confirmListingDecision(details, listing, false);
-        });
-        details.showAndWait();
+        renderListingDetail(listing, fromNotification, true, null);
     }
 
-    private void confirmListingDecision(Dialog<?> details, Listing listing, boolean approve) {
+    private void renderListingDetail(Listing listing, boolean fromNotification, boolean reviewActions, String contextMessage) {
+        setActive(fromNotification ? btnNotifications : btnReview, "Listing Detail");
+        contentPane.getChildren().clear();
+
+        VBox root = new VBox(14);
+        root.setPadding(new Insets(4));
+        root.setId("admin-listing-detail");
+
+        HBox header = new HBox(8);
+        header.setAlignment(Pos.CENTER_LEFT);
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+        Button close = new Button("X");
+        close.setId("close-listing-detail");
+        close.getStyleClass().addAll("btn-outline", "btn-sm");
+        close.setOnAction(event -> {
+            if (fromNotification) showNotifications();
+            else showReview();
+        });
+        header.getChildren().addAll(
+                styled(listing.getTitle() + " (#" + listing.getId() + ")",
+                        "-fx-font-size: 22px; -fx-font-weight: bold;"),
+                spacer,
+                close);
+
+        FlowPane photos = createPhotoGallery(listing.getPhotoPaths(), false);
+
+        VBox facts = new VBox(6);
+        facts.getChildren().addAll(
+                fact("Description", listing.getDescription()),
+                fact("Seller", sellerDisplay(listing)),
+                fact("Category", listing.getCategory()),
+                fact("Type", typeDisplay(listing)),
+                fact("Price", listing.getPriceDisplay()),
+                fact("Condition", listing.getCondition()),
+                fact("Meet-up location", listing.getMeetupLocation()),
+                fact("Submitted", formatDate(listing.getSubmittedAt())),
+                fact("Posted", formatDate(listing.getPostedAt())),
+                fact("Availability", listing.getAvailabilityStatus() + " · "
+                        + listing.getStatus().name().replace('_', ' ')),
+                fact("Views", Integer.toString(listing.getViewCount()))
+        );
+        if (listing.getType() == ListingType.LEND) {
+            String period = listing.getLendingDays() == null
+                    ? "Not recorded"
+                    : listing.getLendingDays() + (listing.getLendingDays() == 1 ? " day" : " days");
+            facts.getChildren().add(4, fact("Lending period", period));
+        }
+        if (listing.getRejectionReason() != null && !listing.getRejectionReason().isBlank()) {
+            facts.getChildren().add(fact("Rejection reason", listing.getRejectionReason()));
+        }
+
+        root.getChildren().add(header);
+        if (contextMessage != null && !contextMessage.isBlank()) {
+            root.getChildren().add(styled(contextMessage, "-fx-text-fill: #8a5a00;"));
+        }
+        root.getChildren().add(photos);
+        root.getChildren().add(facts);
+
+        if (reviewActions) {
+            HBox actions = new HBox(8);
+            Button approve = new Button("Approve");
+            approve.setId("approve-listing");
+            approve.getStyleClass().add("btn-primary");
+            approve.setOnAction(event -> confirmListingDecision(listing, true, fromNotification));
+            Button reject = new Button("Reject");
+            reject.setId("reject-listing");
+            reject.getStyleClass().addAll("btn-outline");
+            reject.setOnAction(event -> confirmListingDecision(listing, false, fromNotification));
+            actions.getChildren().addAll(approve, reject);
+            root.getChildren().add(actions);
+        }
+
+        ScrollPane scroll = new ScrollPane(root);
+        scroll.setFitToWidth(true);
+        scroll.setStyle("-fx-background-color: transparent;");
+        contentPane.getChildren().add(scroll);
+    }
+
+    private void confirmListingDecision(Listing listing, boolean approve, boolean fromNotification) {
         String reason = null;
         if (!approve) {
             TextInputDialog reasonDialog = new TextInputDialog();
@@ -205,11 +262,8 @@ public class AdminDashboardController {
                     reasonDialog.getEditor().requestFocus();
                 }
             });
-            Optional<String> entered = reasonDialog.showAndWait();
-            if (entered.isEmpty()) {
-                details.close();
-                return;
-            }
+            Optional<String> entered = DialogStyle.showAndWait(reasonDialog);
+            if (entered.isEmpty()) return;
             reason = entered.get().trim();
         }
         String decision = approve ? "Approve" : "Reject";
@@ -218,17 +272,14 @@ public class AdminDashboardController {
         confirmation.setHeaderText(decision + " '" + listing.getTitle() + "' (#" + listing.getId() + ")?");
         confirmation.setContentText("Seller: " + sellerDisplay(listing) + "\nType: " + typeDisplay(listing)
                 + "\nDecision: " + decision + (approve ? " — publish listing" : "\nReason: " + reason));
-        if (confirmation.showAndWait().orElse(ButtonType.CANCEL) != ButtonType.OK) {
-            details.close();
-            return;
-        }
+        if (DialogStyle.showAndWait(confirmation).orElse(ButtonType.CANCEL) != ButtonType.OK) return;
         try {
             if (approve) DataService.approveListing(listing.getId(), listing.getReviewVersion());
             else DataService.rejectListing(listing.getId(), reason, listing.getReviewVersion());
         } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
             showReviewFailure(listing, ex);
-            details.close();
-            showReview();
+            if (fromNotification) showNotifications();
+            else showReview();
             return;
         }
         showReview();
@@ -236,8 +287,20 @@ public class AdminDashboardController {
                 ? "Listing approved and published. An approval notification has been saved for the seller."
                 : "Listing rejected. A notification containing the reason has been saved for the seller.");
         success.setTitle("Listing Decision Saved");
-        success.showAndWait();
-        details.close();
+        DialogStyle.showAndWait(success);
+    }
+
+    private Label fact(String name, String value) {
+        Label label = new Label(name + ": " + (value == null || value.isBlank() ? "—" : value));
+        label.setWrapText(true);
+        return label;
+    }
+
+    private Label styled(String text, String style) {
+        Label label = new Label(text);
+        label.setWrapText(true);
+        label.setStyle(style);
+        return label;
     }
 
     private void showReviewFailure(Listing displayed, RuntimeException failure) {
@@ -258,7 +321,7 @@ public class AdminDashboardController {
         text.setPrefRowCount(12);
         alert.getDialogPane().setContent(text);
         alert.setResizable(true);
-        alert.showAndWait();
+        DialogStyle.showAndWait(alert);
     }
 
     private String listingDetailsText(Listing listing) {
@@ -319,7 +382,7 @@ public class AdminDashboardController {
                     scroll.setPrefViewportHeight(500);
                     fullPhoto.getDialogPane().setContent(scroll);
                     fullPhoto.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
-                    fullPhoto.showAndWait();
+                    DialogStyle.showAndWait(fullPhoto);
                 });
                 gallery.getChildren().add(photo);
             } catch (IllegalArgumentException ex) {
@@ -538,11 +601,11 @@ public class AdminDashboardController {
                         ((Button) dialog.getDialogPane().lookupButton(ButtonType.CANCEL)).setDisable(false); dialog.setOnCloseRequest(null);
                     });
                     Thread worker = new Thread(task, "admin-listing-save"); worker.setDaemon(true); worker.start();
-                }); confirm.show();
+                }); DialogStyle.show(confirm);
             });
-            dialog.show();
+            DialogStyle.show(dialog);
         } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
-            Alert error = new Alert(Alert.AlertType.ERROR, ex.getMessage()); error.initOwner(contentPane.getScene().getWindow()); error.show();
+            Alert error = new Alert(Alert.AlertType.ERROR, ex.getMessage()); error.initOwner(contentPane.getScene().getWindow()); DialogStyle.show(error);
             showAllListings();
         }
     }
@@ -586,9 +649,9 @@ public class AdminDashboardController {
                 } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
                     error.setText("Could not take down listing: " + ex.getMessage());
                 }
-            }); confirm.show();
+            }); DialogStyle.show(confirm);
         });
-        dialog.show();
+        DialogStyle.show(dialog);
     }
 
     @FXML
@@ -700,7 +763,7 @@ public class AdminDashboardController {
             details.getDialogPane().setContent(body);
             details.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
             details.setResizable(true);
-            details.showAndWait();
+            DialogStyle.showAndWait(details);
         } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
             showUserManagementError(ex);
             showUsers();
@@ -758,7 +821,7 @@ public class AdminDashboardController {
                     showUsers();
                 }
             });
-            edit.showAndWait();
+            DialogStyle.showAndWait(edit);
         } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
             showUserManagementError(ex);
             showUsers();
@@ -780,7 +843,7 @@ public class AdminDashboardController {
                     ? "Sign-in will be blocked. Profile, listings, deals and chats are retained unchanged. This account can be reactivated."
                     : "Sign-in will be restored using the existing profile and credentials.");
         confirmation.getDialogPane().setPrefWidth(540);
-        if (confirmation.showAndWait().orElse(ButtonType.CANCEL) != ButtonType.OK) return;
+        if (DialogStyle.showAndWait(confirmation).orElse(ButtonType.CANCEL) != ButtonType.OK) return;
         try {
             if (delete) AdminUserService.deleteUser(displayed);
             else AdminUserService.setUserActive(displayed, !displayed.active());
@@ -811,7 +874,7 @@ public class AdminDashboardController {
             dialog.getDialogPane().setContent(history);
             dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
             dialog.setResizable(true);
-            dialog.showAndWait();
+            DialogStyle.showAndWait(dialog);
         } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
             showUserManagementError(ex);
         }
@@ -820,7 +883,7 @@ public class AdminDashboardController {
     private void showUserManagementError(RuntimeException failure) {
         Alert error = new Alert(Alert.AlertType.ERROR, failure.getMessage());
         error.setTitle("User Change Not Saved");
-        error.showAndWait();
+        DialogStyle.showAndWait(error);
     }
 
     @FXML
@@ -984,13 +1047,13 @@ public class AdminDashboardController {
             scroll.setPrefViewportWidth(580);
             scroll.setPrefViewportHeight(460);
             dialog.getDialogPane().setContent(scroll);
-            dialog.show();
+            DialogStyle.show(dialog);
         } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
             Alert error = new Alert(Alert.AlertType.ERROR, ex.getMessage(), ButtonType.CLOSE);
             error.initOwner(contentPane.getScene().getWindow());
             error.setTitle("Deal Unavailable");
             error.setHeaderText("Could not load deal details");
-            error.show();
+            DialogStyle.show(error);
         }
     }
 
@@ -1160,7 +1223,7 @@ public class AdminDashboardController {
                         feedback.setStyle("-fx-text-fill: #c0392b;");
                     }
                 });
-                confirm.show();
+                DialogStyle.show(confirm);
             });
             row.getChildren().addAll(info, hide);
             list.getChildren().add(row);
@@ -1278,11 +1341,9 @@ public class AdminDashboardController {
                 DataService.markAdminNotificationRead(notification.getId());
                 refreshNotificationDot();
                 if ("Listing Report".equals(notification.getCategory()) || listing.getStatus() != ListingStatus.PENDING_REVIEW) {
-                    renderAdminNotifications(list);
                     showNotificationListing(notification, listing);
                 } else {
-                    showReview();
-                    showListingDetails(listing);
+                    showListingDetails(listing, true);
                 }
             } else if (notification.getTargetUsername() != null) {
                 String username = notification.getTargetUsername();
@@ -1337,28 +1398,13 @@ public class AdminDashboardController {
         details.getDialogPane().setContent(scroll);
         details.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
         details.setResizable(true);
-        details.show();
+        DialogStyle.show(details);
     }
 
     private void showNotificationListing(Notification notification, Listing listing) {
-        Dialog<Void> details = new Dialog<>();
-        details.setTitle("Listing Report".equals(notification.getCategory()) ? "Reported Listing" : "Listing Details");
-        details.setHeaderText(listing.getTitle() + " (#" + listing.getId() + ")");
-        details.initOwner(contentPane.getScene().getWindow());
-        Label context = new Label(notification.getMessage());
-        context.setWrapText(true);
-        Label fields = new Label(listingDetailsText(listing));
-        fields.setWrapText(true);
-        VBox body = new VBox(12, context, fields, createPhotoGallery(listing.getPhotoPaths(), false));
-        body.setPadding(new Insets(16));
-        ScrollPane scroll = new ScrollPane(body);
-        scroll.setFitToWidth(true);
-        scroll.setPrefViewportWidth(720);
-        scroll.setPrefViewportHeight(520);
-        details.getDialogPane().setContent(scroll);
-        details.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
-        details.setResizable(true);
-        details.show();
+        boolean pendingReview = listing.getStatus() == ListingStatus.PENDING_REVIEW
+                && !"Listing Report".equals(notification.getCategory());
+        renderListingDetail(listing, true, pendingReview, notification.getMessage());
     }
 
     @FXML

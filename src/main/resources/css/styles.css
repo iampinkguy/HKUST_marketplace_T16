@@ -315,3 +315,89 @@
 .hyperlink:hover {
     -fx-text-fill: #A68137;
 }
+
+/* ---------- Dialogs / Alerts ---------- */
+.dialog-pane,
+.app-dialog {
+    -fx-background-color: #f5f7fa;
+    -fx-font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    -fx-font-size: 14px;
+    -fx-padding: 0;
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.18), 18, 0, 0, 6);
+}
+
+.dialog-pane > .button-bar > .container {
+    -fx-background-color: white;
+    -fx-padding: 14 18 16 18;
+    -fx-spacing: 10;
+    -fx-border-color: #e8f0f8;
+    -fx-border-width: 1 0 0 0;
+}
+
+.dialog-pane > .content {
+    -fx-padding: 16 20 8 20;
+    -fx-background-color: #f5f7fa;
+}
+
+.dialog-pane > .content.label,
+.dialog-pane .label {
+    -fx-text-fill: #1a1a2e;
+    -fx-font-size: 14px;
+}
+
+.dialog-pane:header .header-panel {
+    -fx-background-color: white;
+    -fx-padding: 18 20 12 20;
+    -fx-border-color: #e8f0f8;
+    -fx-border-width: 0 0 1 0;
+}
+
+.dialog-pane:header .header-panel .label {
+    -fx-font-size: 16px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #003974;
+}
+
+.dialog-pane:header .header-panel .header-label {
+    -fx-font-size: 16px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #003974;
+}
+
+.dialog-pane .text-field,
+.dialog-pane .password-field,
+.dialog-pane .text-area,
+.dialog-pane .combo-box,
+.dialog-pane .date-picker,
+.dialog-pane .list-view {
+    -fx-background-radius: 8;
+    -fx-border-radius: 8;
+}
+
+.alert.information .header-panel,
+.alert.confirmation .header-panel {
+    -fx-background-color: #e8f0f8;
+}
+
+.alert.warning .header-panel {
+    -fx-background-color: #fff3e0;
+}
+
+.alert.warning .header-panel .label,
+.alert.warning .header-panel .header-label {
+    -fx-text-fill: #ed6c02;
+}
+
+.alert.error .header-panel {
+    -fx-background-color: #ffebee;
+}
+
+.alert.error .header-panel .label,
+.alert.error .header-panel .header-label {
+    -fx-text-fill: #c62828;
+}
+
+.app-dialog .button,
+.dialog-pane .button {
+    -fx-min-width: 88;
+}
