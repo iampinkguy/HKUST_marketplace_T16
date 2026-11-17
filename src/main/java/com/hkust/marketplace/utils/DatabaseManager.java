@@ -409,11 +409,14 @@ public class DatabaseManager {
         addColumnIfMissing("listing_requests", "borrow_end", "TEXT");
         addColumnIfMissing("listing_requests", "due_at", "TEXT");
         addColumnIfMissing("listing_requests", "completed_at", "TEXT");
+        addColumnIfMissing("listing_requests", "buyer_completed_at", "TEXT");
+        addColumnIfMissing("listing_requests", "seller_completed_at", "TEXT");
         addColumnIfMissing("listing_requests", "returned_at", "TEXT");
         addColumnIfMissing("listing_requests", "rated", "INTEGER NOT NULL DEFAULT 0");
         addColumnIfMissing("reviews", "created_at", "TEXT");
         addColumnIfMissing("reviews", "seller_reply", "TEXT");
         addColumnIfMissing("reviews", "hidden", "INTEGER NOT NULL DEFAULT 0");
+        addColumnIfMissing("reviews", "flagged", "INTEGER NOT NULL DEFAULT 0");
         addColumnIfMissing("notifications", "request_id", "INTEGER");
         addColumnIfMissing("notifications", "listing_id", "INTEGER");
         runSql("""
@@ -1093,8 +1096,13 @@ public class DatabaseManager {
         if (replacePhotos) deleteStoredPhotos(oldPhotos, "updated");
     }
 
-    /** Marks a seller-owned listing complete (SOLD / LENT / GIVEN) and closes open requests. */
-    public static void completeSellerListing(String listingId, String sellerUsername, long expectedVersion) {
+    /**
+     * Records the seller's completion confirmation for the accepted deal on this listing.
+     * The listing is only finalized when the buyer has also marked complete.
+     *
+     * @return true if both sides have now confirmed and the deal is fully completed
+     */
+    public static boolean completeSellerListing(String listingId, String sellerUsername, long expectedVersion) {
         if (sellerUsername == null || sellerUsername.isBlank()) {
             throw new IllegalArgumentException("A seller account is required.");
         }
@@ -1103,12 +1111,8 @@ public class DatabaseManager {
         try (Connection connection = connect()) {
             connection.setAutoCommit(false);
             try {
-                String listingType;
-                String listingStatus;
-                String itemName;
                 try (PreparedStatement statement = connection.prepareStatement("""
-                        SELECT listing_type, listing_status, item_name
-                        FROM listings
+                        SELECT listing_id FROM listings
                         WHERE listing_id = ? AND seller_username = ? COLLATE NOCASE
                             AND review_version = ?
                         """)) {
@@ -1120,98 +1124,43 @@ public class DatabaseManager {
                             throw new IllegalStateException(
                                     "This listing is no longer available or has changed. Refresh and try again.");
                         }
-                        listingType = result.getString("listing_type");
-                        listingStatus = result.getString("listing_status");
-                        itemName = result.getString("item_name");
                     }
                 }
-                if (!"LIVE".equals(listingStatus) && !"RESERVED".equals(listingStatus)) {
-                    throw new IllegalStateException("Only live or reserved listings can be marked complete.");
+                Map<String, Object> request = fetchAcceptedCompletableDeal(connection, id, sellerUsername);
+                if (request == null) {
+                    throw new IllegalStateException(
+                            "Accept a buyer's offer or claim first. Both buyer and seller must mark complete.");
                 }
-                String completedStatus = switch (listingType) {
-                    case "SELL" -> "SOLD";
-                    case "LEND" -> "LENT";
-                    case "GIVEAWAY" -> "GIVEN";
-                    default -> throw new IllegalStateException("Unsupported listing type.");
-                };
+                if (request.get("seller_completed_at") != null) {
+                    throw new IllegalStateException("You already marked this deal as complete.");
+                }
+                int requestId = ((Number) request.get("request_id")).intValue();
+                String buyer = (String) request.get("buyer_username");
+                String itemName = request.get("item_name") == null ? "the item" : (String) request.get("item_name");
                 try (PreparedStatement update = connection.prepareStatement("""
-                        UPDATE listings
-                        SET listing_status = ?, availability_status = 'Unavailable'
-                        WHERE listing_id = ? AND seller_username = ? COLLATE NOCASE
-                            AND review_version = ?
-                            AND listing_status IN ('LIVE', 'RESERVED')
-                        """)) {
-                    update.setString(1, completedStatus);
-                    update.setInt(2, id);
-                    update.setString(3, sellerUsername);
-                    update.setLong(4, expectedVersion);
-                    if (update.executeUpdate() != 1) {
-                        throw new IllegalStateException(
-                                "This listing is no longer available or has changed. Refresh and try again.");
-                    }
-                }
-                try (PreparedStatement completeRequests = connection.prepareStatement("""
                         UPDATE listing_requests
-                        SET completed_at = COALESCE(completed_at, ?), updated_at = ?
-                        WHERE listing_id = ? AND status = 'ACCEPTED'
-                            AND completed_at IS NULL AND returned_at IS NULL
+                        SET seller_completed_at = ?, updated_at = ?
+                        WHERE request_id = ? AND seller_completed_at IS NULL
+                            AND completed_at IS NULL AND returned_at IS NULL AND status = 'ACCEPTED'
                         """)) {
-                    completeRequests.setString(1, now.toString());
-                    completeRequests.setString(2, now.toString());
-                    completeRequests.setInt(3, id);
-                    completeRequests.executeUpdate();
-                }
-                List<Map<String, Object>> openRequests = new ArrayList<>();
-                try (PreparedStatement pending = connection.prepareStatement("""
-                        SELECT request_id, buyer_username, status FROM listing_requests
-                        WHERE listing_id = ? AND status IN ('PENDING', 'COUNTERED')
-                        """)) {
-                    pending.setInt(1, id);
-                    try (ResultSet result = pending.executeQuery()) {
-                        while (result.next()) {
-                            openRequests.add(resultSetToMap(result));
-                        }
+                    update.setString(1, now.toString());
+                    update.setString(2, now.toString());
+                    update.setInt(3, requestId);
+                    if (update.executeUpdate() != 1) {
+                        throw new IllegalStateException("This deal cannot be marked complete.");
                     }
                 }
-                if (!openRequests.isEmpty()) {
-                    try (PreparedStatement decline = connection.prepareStatement("""
-                            UPDATE listing_requests SET status = 'DECLINED', updated_at = ?
-                            WHERE listing_id = ? AND status IN ('PENDING', 'COUNTERED')
-                            """)) {
-                        decline.setString(1, now.toString());
-                        decline.setInt(2, id);
-                        decline.executeUpdate();
-                    }
-                }
-                for (Map<String, Object> request : openRequests) {
-                    insertNotification(connection,
-                            (String) request.get("buyer_username"),
-                            sellerUsername,
-                            "Listing completed",
-                            itemName + " was marked complete by the seller.",
-                            "Offer",
-                            ((Number) request.get("request_id")).intValue(),
-                            id);
-                }
-                try (PreparedStatement accepted = connection.prepareStatement("""
-                        SELECT request_id, buyer_username FROM listing_requests
-                        WHERE listing_id = ? AND status = 'ACCEPTED'
-                        """)) {
-                    accepted.setInt(1, id);
-                    try (ResultSet result = accepted.executeQuery()) {
-                        while (result.next()) {
-                            insertNotification(connection,
-                                    result.getString("buyer_username"),
-                                    sellerUsername,
-                                    "Listing completed",
-                                    itemName + " was marked complete by the seller.",
-                                    "System",
-                                    result.getInt("request_id"),
-                                    id);
-                        }
-                    }
+                request.put("seller_completed_at", now.toString());
+                boolean fullyDone = request.get("buyer_completed_at") != null
+                        && finalizeMutualDealCompletion(connection, request, now);
+                if (!fullyDone) {
+                    insertNotification(connection, buyer, sellerUsername, "Seller marked complete",
+                            sellerUsername + " marked the deal for " + itemName
+                                    + " as complete. Mark complete on your side to finish the listing.",
+                            "System", requestId, id);
                 }
                 connection.commit();
+                return fullyDone;
             } catch (SQLException | RuntimeException e) {
                 try {
                     connection.rollback();
@@ -1224,6 +1173,84 @@ public class DatabaseManager {
         } catch (SQLException e) {
             throw new IllegalStateException("Could not complete listing.", e);
         }
+    }
+
+    public static Map<String, Object> fetchSellerCompletableDeal(String listingId, String sellerUsername) {
+        int id = parseListingId(listingId);
+        try (Connection connection = connect()) {
+            return fetchAcceptedCompletableDeal(connection, id, sellerUsername);
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not load the accepted deal.", e);
+        }
+    }
+
+    private static Map<String, Object> fetchAcceptedCompletableDeal(Connection connection, int listingId,
+                                                                    String sellerUsername) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT r.request_id, r.buyer_username, r.listing_id, r.request_type, r.status,
+                       r.completed_at, r.buyer_completed_at, r.seller_completed_at, r.returned_at,
+                       l.item_name, l.seller, l.listing_type, l.listing_status
+                FROM listing_requests r
+                JOIN listings l ON l.listing_id = r.listing_id
+                WHERE r.listing_id = ? AND r.status = 'ACCEPTED'
+                    AND r.request_type IN ('OFFER', 'CLAIM')
+                    AND r.completed_at IS NULL AND r.returned_at IS NULL
+                    AND (l.seller = ? COLLATE NOCASE OR l.seller_username = ? COLLATE NOCASE)
+                ORDER BY r.updated_at DESC
+                LIMIT 1
+                """)) {
+            statement.setInt(1, listingId);
+            statement.setString(2, sellerUsername);
+            statement.setString(3, sellerUsername);
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next() ? resultSetToMap(result) : null;
+            }
+        }
+    }
+
+    /** Finalizes the deal only when both buyer_completed_at and seller_completed_at are set. */
+    private static boolean finalizeMutualDealCompletion(Connection connection, Map<String, Object> request,
+                                                        LocalDateTime now) throws SQLException {
+        if (request.get("buyer_completed_at") == null || request.get("seller_completed_at") == null) {
+            return false;
+        }
+        int requestId = ((Number) request.get("request_id")).intValue();
+        try (PreparedStatement update = connection.prepareStatement("""
+                UPDATE listing_requests
+                SET completed_at = ?, updated_at = ?
+                WHERE request_id = ? AND completed_at IS NULL AND returned_at IS NULL
+                    AND buyer_completed_at IS NOT NULL AND seller_completed_at IS NOT NULL
+                """)) {
+            update.setString(1, now.toString());
+            update.setString(2, now.toString());
+            update.setInt(3, requestId);
+            if (update.executeUpdate() != 1) return false;
+        }
+        if (request.get("listing_id") != null && "SELL".equals(request.get("listing_type"))
+                && "RESERVED".equals(request.get("listing_status"))) {
+            try (PreparedStatement update = connection.prepareStatement("""
+                    UPDATE listings SET listing_status = 'SOLD', availability_status = 'Unavailable'
+                    WHERE listing_id = ? AND listing_status = 'RESERVED'
+                    """)) {
+                update.setInt(1, ((Number) request.get("listing_id")).intValue());
+                update.executeUpdate();
+            }
+        }
+        String buyer = (String) request.get("buyer_username");
+        String seller = (String) request.get("seller");
+        String itemName = request.get("item_name") == null ? "the item" : (String) request.get("item_name");
+        Integer listingId = request.get("listing_id") instanceof Number value ? value.intValue() : null;
+        if (buyer != null) {
+            insertNotification(connection, buyer, seller == null ? "system" : seller, "Deal completed",
+                    "Both sides marked complete. The deal for " + itemName + " is finished.",
+                    "System", requestId, listingId);
+        }
+        if (seller != null) {
+            insertNotification(connection, seller, buyer == null ? "system" : buyer, "Deal completed",
+                    "Both sides marked complete. The deal for " + itemName + " is finished.",
+                    "System", requestId, listingId);
+        }
+        return true;
     }
 
     /** Permanently removes a seller-owned listing and its saved favourites. */
@@ -2511,7 +2538,8 @@ public class DatabaseManager {
         return fetchQuery("""
                 SELECT r.request_id, r.buyer_username, r.listing_id, r.request_type, r.offer_price,
                        r.proposed_days, r.status, r.counter_price, r.created_at, r.updated_at,
-                       r.borrow_start, r.borrow_end, r.due_at, r.completed_at, r.returned_at, r.rated,
+                       r.borrow_start, r.borrow_end, r.due_at, r.completed_at, r.buyer_completed_at,
+                       r.seller_completed_at, r.returned_at, r.rated,
                        l.item_name, l.listing_type, l.listing_status, l.category, l.seller,
                        l.availability_status, l.review_version, seller.full_name AS seller_name
                 FROM listing_requests r
@@ -2618,14 +2646,21 @@ public class DatabaseManager {
         }
     }
 
-    public static void completeBuyerDeal(String buyerUsername, int requestId) {
+    /**
+     * Records the buyer's completion confirmation.
+     * The listing/deal is only finalized when the seller has also marked complete.
+     *
+     * @return true if both sides have now confirmed and the deal is fully completed
+     */
+    public static boolean completeBuyerDeal(String buyerUsername, int requestId) {
         LocalDateTime now = LocalDateTime.now();
         try (Connection connection = connect()) {
             connection.setAutoCommit(false);
             try {
                 Map<String, Object> request;
                 try (PreparedStatement statement = connection.prepareStatement("""
-                        SELECT r.request_id, r.listing_id, r.request_type, r.status, r.completed_at, r.returned_at,
+                        SELECT r.request_id, r.listing_id, r.request_type, r.status, r.completed_at,
+                               r.buyer_completed_at, r.seller_completed_at, r.returned_at, r.buyer_username,
                                l.item_name, l.seller, l.listing_type, l.listing_status
                         FROM listing_requests r
                         LEFT JOIN listings l ON l.listing_id = r.listing_id
@@ -2645,9 +2680,14 @@ public class DatabaseManager {
                 if (!"OFFER".equals(type) && !"CLAIM".equals(type)) {
                     throw new IllegalStateException("Borrowed items are completed by returning them.");
                 }
+                if (request.get("buyer_completed_at") != null) {
+                    throw new IllegalStateException("You already marked this deal as complete.");
+                }
                 try (PreparedStatement update = connection.prepareStatement("""
-                        UPDATE listing_requests SET completed_at = ?, updated_at = ?
-                        WHERE request_id = ? AND completed_at IS NULL AND returned_at IS NULL
+                        UPDATE listing_requests
+                        SET buyer_completed_at = ?, updated_at = ?
+                        WHERE request_id = ? AND buyer_completed_at IS NULL
+                            AND completed_at IS NULL AND returned_at IS NULL
                         """)) {
                     update.setString(1, now.toString());
                     update.setString(2, now.toString());
@@ -2656,25 +2696,22 @@ public class DatabaseManager {
                         throw new IllegalStateException("This deal cannot be marked complete.");
                     }
                 }
-                if (request.get("listing_id") != null && "SELL".equals(request.get("listing_type"))
-                        && "RESERVED".equals(request.get("listing_status"))) {
-                    try (PreparedStatement update = connection.prepareStatement("""
-                            UPDATE listings SET listing_status = 'SOLD'
-                            WHERE listing_id = ? AND listing_status = 'RESERVED'
-                            """)) {
-                        update.setInt(1, ((Number) request.get("listing_id")).intValue());
-                        update.executeUpdate();
+                request.put("buyer_completed_at", now.toString());
+                boolean fullyDone = request.get("seller_completed_at") != null
+                        && finalizeMutualDealCompletion(connection, request, now);
+                if (!fullyDone) {
+                    String seller = (String) request.get("seller");
+                    String itemName = request.get("item_name") == null ? "the item" : (String) request.get("item_name");
+                    Integer listingId = request.get("listing_id") instanceof Number id ? id.intValue() : null;
+                    if (seller != null) {
+                        insertNotification(connection, seller, buyerUsername, "Buyer marked complete",
+                                buyerUsername + " marked the deal for " + itemName
+                                        + " as complete. Mark complete on your side to finish the listing.",
+                                "System", requestId, listingId);
                     }
                 }
-                String seller = (String) request.get("seller");
-                String itemName = request.get("item_name") == null ? "the item" : (String) request.get("item_name");
-                Integer listingId = request.get("listing_id") instanceof Number id ? id.intValue() : null;
-                if (seller != null) {
-                    insertNotification(connection, seller, buyerUsername, "Deal completed",
-                            buyerUsername + " marked the deal for " + itemName + " as complete.", "System",
-                            requestId, listingId);
-                }
                 connection.commit();
+                return fullyDone;
             } catch (RuntimeException | SQLException e) {
                 connection.rollback();
                 if (e instanceof RuntimeException runtimeException) throw runtimeException;
@@ -2778,7 +2815,8 @@ public class DatabaseManager {
     public static List<Map<String, Object>> fetchSellerReviews(String sellerUsername) {
         return fetchQuery("""
                 SELECT r.rating, r.text, r.buyer_username, r.listing_id, r.created_at, r.seller_reply,
-                       l.item_name, COALESCE(l.seller, l.seller_username) AS seller_username
+                       COALESCE(r.flagged, 0) AS flagged, l.item_name,
+                       COALESCE(l.seller, l.seller_username) AS seller_username
                 FROM reviews r
                 JOIN listings l ON l.listing_id = r.listing_id
                 WHERE (l.seller = ? OR l.seller_username = ?) AND COALESCE(r.hidden, 0) = 0
@@ -2789,11 +2827,11 @@ public class DatabaseManager {
     public static List<Map<String, Object>> fetchAllReviews() {
         return fetchQuery("""
                 SELECT r.buyer_username, r.listing_id, r.rating, r.text, r.created_at, r.seller_reply,
-                       COALESCE(r.hidden, 0) AS hidden, l.item_name,
+                       COALESCE(r.hidden, 0) AS hidden, COALESCE(r.flagged, 0) AS flagged, l.item_name,
                        COALESCE(l.seller, l.seller_username) AS seller_username
                 FROM reviews r
                 JOIN listings l ON l.listing_id = r.listing_id
-                ORDER BY julianday(r.created_at) DESC, r.listing_id, r.buyer_username
+                ORDER BY COALESCE(r.flagged, 0) DESC, julianday(r.created_at) DESC, r.listing_id, r.buyer_username
                 """);
     }
 
@@ -2841,6 +2879,151 @@ public class DatabaseManager {
             }
         } catch (SQLException e) {
             throw new IllegalStateException("Could not update review visibility.", e);
+        }
+    }
+
+    /** Saves/updates a seller reply on a buyer review and notifies the buyer. */
+    public static void replyToSellerReview(String sellerUsername, String buyerUsername, int listingId, String replyText) {
+        if (sellerUsername == null || sellerUsername.isBlank()
+                || buyerUsername == null || buyerUsername.isBlank()) {
+            throw new IllegalArgumentException("Seller and buyer are required.");
+        }
+        String reply = replyText == null ? "" : replyText.trim();
+        if (reply.isEmpty() || reply.length() > 1000) {
+            throw new IllegalArgumentException("Reply must contain 1 to 1000 characters.");
+        }
+        LocalDateTime now = LocalDateTime.now();
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            try {
+                String itemName;
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        SELECT r.buyer_username, l.item_name
+                        FROM reviews r
+                        JOIN listings l ON l.listing_id = r.listing_id
+                        WHERE r.buyer_username = ? COLLATE NOCASE AND r.listing_id = ?
+                            AND COALESCE(r.hidden, 0) = 0
+                            AND (l.seller = ? COLLATE NOCASE OR l.seller_username = ? COLLATE NOCASE)
+                        """)) {
+                    statement.setString(1, buyerUsername);
+                    statement.setInt(2, listingId);
+                    statement.setString(3, sellerUsername);
+                    statement.setString(4, sellerUsername);
+                    try (ResultSet result = statement.executeQuery()) {
+                        if (!result.next()) {
+                            throw new IllegalStateException("Review was not found for your listing.");
+                        }
+                        itemName = result.getString("item_name");
+                    }
+                }
+                try (PreparedStatement update = connection.prepareStatement("""
+                        UPDATE reviews SET seller_reply = ?
+                        WHERE buyer_username = ? COLLATE NOCASE AND listing_id = ?
+                        """)) {
+                    update.setString(1, reply);
+                    update.setString(2, buyerUsername);
+                    update.setInt(3, listingId);
+                    if (update.executeUpdate() != 1) {
+                        throw new IllegalStateException("Could not save the seller reply.");
+                    }
+                }
+                insertNotification(connection, buyerUsername, sellerUsername, "Seller replied to your feedback",
+                        sellerUsername + " replied to your review for " + itemName + ": " + reply,
+                        "Rating", null, listingId);
+                connection.commit();
+            } catch (RuntimeException | SQLException e) {
+                connection.rollback();
+                if (e instanceof RuntimeException runtimeException) throw runtimeException;
+                throw new IllegalStateException("Could not save the seller reply.", e);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not save the seller reply.", e);
+        }
+    }
+
+    public static List<Map<String, Object>> fetchBuyerReviews(String buyerUsername) {
+        return fetchQuery("""
+                SELECT r.rating, r.text, r.buyer_username, r.listing_id, r.created_at, r.seller_reply,
+                       COALESCE(r.flagged, 0) AS flagged,
+                       l.item_name, COALESCE(l.seller, l.seller_username) AS seller_username,
+                       seller.full_name AS seller_name
+                FROM reviews r
+                JOIN listings l ON l.listing_id = r.listing_id
+                LEFT JOIN users seller ON seller.username = COALESCE(l.seller, l.seller_username)
+                WHERE r.buyer_username = ? COLLATE NOCASE AND COALESCE(r.hidden, 0) = 0
+                ORDER BY COALESCE(r.created_at, '') DESC
+                """, buyerUsername);
+    }
+
+    /** Flags a review for admin moderation and notifies all active admins. */
+    public static void flagSellerReview(String sellerUsername, String buyerUsername, int listingId) {
+        if (sellerUsername == null || sellerUsername.isBlank()
+                || buyerUsername == null || buyerUsername.isBlank()) {
+            throw new IllegalArgumentException("Seller and buyer are required.");
+        }
+        LocalDateTime now = LocalDateTime.now();
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            try {
+                String itemName;
+                String comment;
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        SELECT r.text, r.flagged, l.item_name
+                        FROM reviews r
+                        JOIN listings l ON l.listing_id = r.listing_id
+                        WHERE r.buyer_username = ? COLLATE NOCASE AND r.listing_id = ?
+                            AND COALESCE(r.hidden, 0) = 0
+                            AND (l.seller = ? COLLATE NOCASE OR l.seller_username = ? COLLATE NOCASE)
+                        """)) {
+                    statement.setString(1, buyerUsername);
+                    statement.setInt(2, listingId);
+                    statement.setString(3, sellerUsername);
+                    statement.setString(4, sellerUsername);
+                    try (ResultSet result = statement.executeQuery()) {
+                        if (!result.next()) {
+                            throw new IllegalStateException("Review was not found for your listing.");
+                        }
+                        if (result.getInt("flagged") != 0) {
+                            throw new IllegalStateException("This review is already flagged for admin moderation.");
+                        }
+                        itemName = result.getString("item_name");
+                        comment = result.getString("text");
+                    }
+                }
+                try (PreparedStatement update = connection.prepareStatement("""
+                        UPDATE reviews SET flagged = 1
+                        WHERE buyer_username = ? COLLATE NOCASE AND listing_id = ? AND COALESCE(flagged, 0) = 0
+                        """)) {
+                    update.setString(1, buyerUsername);
+                    update.setInt(2, listingId);
+                    if (update.executeUpdate() != 1) {
+                        throw new IllegalStateException("This review is already flagged for admin moderation.");
+                    }
+                }
+                String snippet = comment == null || comment.isBlank() ? "(no written comment)" : comment.trim();
+                if (snippet.length() > 120) snippet = snippet.substring(0, 117) + "...";
+                try (PreparedStatement notify = connection.prepareStatement("""
+                        INSERT INTO notifications (username, sender, title, message, category, timestamp, listing_id)
+                        SELECT username, ?, 'Review flagged for moderation', ?, 'System', ?, ?
+                        FROM users WHERE role = 'ADMIN' AND active = 1
+                        """)) {
+                    notify.setString(1, sellerUsername);
+                    notify.setString(2, sellerUsername + " flagged a review by @" + buyerUsername
+                            + " on '" + itemName + "': " + snippet);
+                    notify.setString(3, now.toString());
+                    notify.setInt(4, listingId);
+                    if (notify.executeUpdate() == 0) {
+                        throw new IllegalStateException("No active admin account is available to notify.");
+                    }
+                }
+                connection.commit();
+            } catch (RuntimeException | SQLException e) {
+                connection.rollback();
+                if (e instanceof RuntimeException runtimeException) throw runtimeException;
+                throw new IllegalStateException("Could not flag the review.", e);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not flag the review.", e);
         }
     }
 

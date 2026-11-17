@@ -5,6 +5,7 @@ import com.hkust.marketplace.models.Listing;
 import com.hkust.marketplace.models.ListingType;
 import com.hkust.marketplace.models.Message;
 import com.hkust.marketplace.models.Notification;
+import com.hkust.marketplace.models.Review;
 import com.hkust.marketplace.models.User;
 import com.hkust.marketplace.utils.DataService;
 import com.hkust.marketplace.utils.DatabaseManager;
@@ -768,8 +769,12 @@ public class BuyerDashboardController {
         tools.getChildren().addAll(filterBtn, sortBtn, styled(dealSummary(), muted()), spacer, close);
 
         List<Map<String, Object>> deals;
+        Map<String, Review> reviewsByListing = new java.util.HashMap<>();
         try {
             deals = filteredDeals(DataService.getBuyerDeals());
+            for (Review review : DataService.getBuyerReviews()) {
+                if (review.getId() != null) reviewsByListing.put(review.getId(), review);
+            }
         } catch (IllegalStateException | SecurityException ex) {
             alert(Alert.AlertType.ERROR, ex.getMessage());
             deals = List.of();
@@ -781,7 +786,7 @@ public class BuyerDashboardController {
         boolean anyOngoing = false;
         boolean anyCompleted = false;
         for (Map<String, Object> deal : deals) {
-            VBox card = dealCard(deal);
+            VBox card = dealCard(deal, reviewsByListing);
             if (isOngoing(deal)) {
                 ongoing.getChildren().add(card);
                 anyOngoing = true;
@@ -796,7 +801,7 @@ public class BuyerDashboardController {
         contentPane.getChildren().setAll(scroll(root));
     }
 
-    private VBox dealCard(Map<String, Object> deal) {
+    private VBox dealCard(Map<String, Object> deal, Map<String, Review> reviewsByListing) {
         VBox card = new VBox(6);
         card.getStyleClass().add("card");
         card.setPadding(new Insets(12));
@@ -810,6 +815,11 @@ public class BuyerDashboardController {
         String status = String.valueOf(deal.get("status")).replace('_', ' ');
         if (deal.get("returned_at") != null) status = "Returned";
         else if (deal.get("completed_at") != null) status = "Completed";
+        else if (deal.get("buyer_completed_at") != null && deal.get("seller_completed_at") == null) {
+            status = "Waiting for seller to mark complete";
+        } else if (deal.get("seller_completed_at") != null && deal.get("buyer_completed_at") == null) {
+            status = "Waiting for you to mark complete";
+        }
         if (deal.get("counter_price") != null) status += " · Counter HK$" + trimNumber(deal.get("counter_price"));
         card.getChildren().addAll(
                 styled(textValue(deal.get("item_name")), "-fx-font-weight: bold; -fx-font-size: 15px;"),
@@ -845,14 +855,20 @@ public class BuyerDashboardController {
             actions.getChildren().add(ret);
         }
         if (("OFFER".equals(type) || "CLAIM".equals(type)) && "ACCEPTED".equals(deal.get("status"))
-                && deal.get("completed_at") == null) {
+                && deal.get("completed_at") == null && deal.get("buyer_completed_at") == null) {
             Button complete = new Button("Mark complete");
             complete.getStyleClass().add("btn-primary");
             complete.setOnAction(event -> {
                 try {
-                    DataService.completeBuyerDeal(requestId);
-                    alert(Alert.AlertType.INFORMATION, "The deal is complete.");
-                    askForRating(requestId, textValue(deal.get("item_name")));
+                    boolean fullyDone = DataService.completeBuyerDeal(requestId);
+                    if (fullyDone) {
+                        alert(Alert.AlertType.INFORMATION,
+                                "Both sides marked complete. The deal is finished.");
+                        askForRating(requestId, textValue(deal.get("item_name")));
+                    } else {
+                        alert(Alert.AlertType.INFORMATION,
+                                "Your completion is saved. Waiting for the seller to mark complete.");
+                    }
                     showMyDeals();
                 } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
                     alert(Alert.AlertType.ERROR, ex.getMessage());
@@ -871,6 +887,21 @@ public class BuyerDashboardController {
             actions.getChildren().add(rate);
         }
         card.getChildren().add(actions);
+        if (isRated(deal) && deal.get("listing_id") != null) {
+            Review review = reviewsByListing.get(String.valueOf(deal.get("listing_id")));
+            if (review != null) {
+                String feedback = "Your feedback: "
+                        + (review.getComment() == null || review.getComment().isBlank()
+                        ? "(rating only)" : review.getComment());
+                card.getChildren().add(styled(feedback, muted()));
+                if (review.getSellerReply() != null && !review.getSellerReply().isBlank()) {
+                    card.getChildren().add(styled("Seller reply: " + review.getSellerReply(),
+                            "-fx-text-fill: #003974; -fx-font-size: 12px;"));
+                } else {
+                    card.getChildren().add(styled("Waiting for seller reply.", faint()));
+                }
+            }
+        }
         return card;
     }
 

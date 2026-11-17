@@ -4,6 +4,8 @@ import com.hkust.marketplace.models.*;
 import com.hkust.marketplace.utils.DataService;
 import com.hkust.marketplace.utils.SceneManager;
 import com.hkust.marketplace.utils.SessionManager;
+import javafx.animation.KeyFrame;
+import javafx.animation.Timeline;
 import javafx.collections.FXCollections;
 import javafx.event.ActionEvent;
 import javafx.fxml.FXML;
@@ -12,7 +14,11 @@ import javafx.geometry.Pos;
 import javafx.scene.control.*;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.*;
+import javafx.scene.paint.Color;
+import javafx.scene.shape.Circle;
+import javafx.util.Duration;
 
 import java.nio.file.Path;
 import java.time.LocalDateTime;
@@ -26,6 +32,7 @@ public class AdminDashboardController {
     @FXML private Label pageTitle;
     @FXML private Label welcomeLabel;
     @FXML private Button btnReview, btnAllListings, btnUsers, btnDeals, btnRatings, btnNotifications, btnProfile;
+    @FXML private Circle notifUnreadDot;
 
     private Button currentActiveBtn;
     private String userActionMessage;
@@ -33,13 +40,49 @@ public class AdminDashboardController {
     private String notificationCategory = "All";
     private String notificationState = "All";
     private String listingActionMessage;
+    private Timeline notificationTicker;
 
     @FXML
     public void initialize() {
         User user = SessionManager.getCurrentUser();
         if (user != null) welcomeLabel.setText("Admin: " + user.getFullName());
         currentActiveBtn = btnReview;
+        ensureNotificationDot();
+        notificationTicker = new Timeline(new KeyFrame(Duration.seconds(2), event -> refreshNotificationDot()));
+        notificationTicker.setCycleCount(Timeline.INDEFINITE);
+        notificationTicker.play();
+        refreshNotificationDot();
         showReview();
+    }
+
+    private void ensureNotificationDot() {
+        if (notifUnreadDot != null) {
+            notifUnreadDot.toFront();
+            return;
+        }
+        if (btnNotifications == null || !(btnNotifications.getParent() instanceof StackPane host)) return;
+        notifUnreadDot = new Circle(6, Color.web("#e53935"));
+        notifUnreadDot.setStroke(Color.WHITE);
+        notifUnreadDot.setStrokeWidth(1.5);
+        notifUnreadDot.setMouseTransparent(true);
+        notifUnreadDot.setVisible(false);
+        StackPane.setAlignment(notifUnreadDot, Pos.TOP_RIGHT);
+        notifUnreadDot.setTranslateX(-14);
+        notifUnreadDot.setTranslateY(10);
+        host.getChildren().add(notifUnreadDot);
+    }
+
+    private void refreshNotificationDot() {
+        ensureNotificationDot();
+        if (notifUnreadDot == null) return;
+        boolean unread = false;
+        try {
+            unread = DataService.hasUnreadNotifications();
+        } catch (IllegalStateException | SecurityException ignored) {
+            unread = false;
+        }
+        notifUnreadDot.setVisible(unread);
+        if (unread) notifUnreadDot.toFront();
     }
 
     private void setActive(Button btn, String title) {
@@ -1068,7 +1111,8 @@ public class AdminDashboardController {
             Label stars = new Label(r.getScore() + " / 5  ·  @" + r.getSellerUsername() + " by @" + r.getBuyerUsername());
             stars.setWrapText(true);
             stars.setStyle("-fx-font-weight: bold;");
-            Label comment = new Label(r.getComment());
+            Label comment = new Label(r.getComment() == null || r.getComment().isBlank()
+                    ? "(No written feedback)" : r.getComment());
             comment.setWrapText(true);
             comment.setStyle("-fx-text-fill: #5a5a7a;");
             Label details = new Label(r.getListingTitle() + "  ·  "
@@ -1078,7 +1122,14 @@ public class AdminDashboardController {
             info.getChildren().addAll(stars, details, comment);
             if (r.getSellerReply() != null && !r.getSellerReply().isBlank()) {
                 Label reply = new Label("Seller reply: " + r.getSellerReply());
-                reply.setWrapText(true); info.getChildren().add(reply);
+                reply.setWrapText(true);
+                reply.setStyle("-fx-text-fill: #003974;");
+                info.getChildren().add(reply);
+            }
+            if (r.isFlagged()) {
+                Label flagged = new Label("Flagged by seller for moderation");
+                flagged.setStyle("-fx-text-fill: #c62828; -fx-font-weight: bold;");
+                info.getChildren().add(flagged);
             }
 
             Button hide = new Button(r.isHidden() ? "Restore" : "Hide");
@@ -1151,6 +1202,7 @@ public class AdminDashboardController {
         VBox.setVgrow(scroll, Priority.ALWAYS);
         root.getChildren().addAll(filters, scroll);
         contentPane.getChildren().add(root);
+        refreshNotificationDot();
     }
 
     private void renderAdminNotifications(VBox list) {
@@ -1178,8 +1230,7 @@ public class AdminDashboardController {
                         + " · " + (n.isRead() ? "Read" : "Unread"));
                 meta.setWrapText(true);
                 meta.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 11px;");
-                Button open = new Button(n.getListingId() != null ? "Open listing"
-                        : n.getTargetUsername() != null ? "View account update" : "View notification");
+                Button open = new Button("Go ->");
                 open.setId("open-admin-notification-" + n.getId());
                 open.getStyleClass().addAll("btn-outline", "btn-sm");
                 open.setOnAction(event -> openAdminNotification(n, list));
@@ -1214,10 +1265,18 @@ public class AdminDashboardController {
             String id = notification.getId();
             notification = DataService.getAdminNotifications().stream().filter(n -> id.equals(n.getId())).findFirst()
                     .orElseThrow(() -> new IllegalStateException("Notification is no longer available. Refresh the board."));
+            String title = notification.getTitle() == null ? "" : notification.getTitle().toLowerCase();
+            if (title.contains("flagged") || title.contains("moderation")) {
+                DataService.markAdminNotificationRead(notification.getId());
+                refreshNotificationDot();
+                showRatings();
+                return;
+            }
             if (notification.getListingId() != null) {
                 Listing listing = DataService.getListingForAdmin(notification.getListingId().toString());
                 if (listing == null) throw new IllegalStateException("This listing no longer exists. Refresh the notification board.");
                 DataService.markAdminNotificationRead(notification.getId());
+                refreshNotificationDot();
                 if ("Listing Report".equals(notification.getCategory()) || listing.getStatus() != ListingStatus.PENDING_REVIEW) {
                     renderAdminNotifications(list);
                     showNotificationListing(notification, listing);
