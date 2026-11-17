@@ -9,6 +9,7 @@ import com.hkust.marketplace.models.Review;
 import com.hkust.marketplace.models.User;
 import com.hkust.marketplace.utils.DataService;
 import com.hkust.marketplace.utils.DatabaseManager;
+import com.hkust.marketplace.utils.DialogStyle;
 import com.hkust.marketplace.utils.SceneManager;
 import com.hkust.marketplace.utils.SessionManager;
 import javafx.animation.KeyFrame;
@@ -258,7 +259,7 @@ public class BuyerDashboardController {
                 new Label("Listing type"), types,
                 new Label("Condition"), conditions,
                 new Label("Price range (HK$)"), new HBox(8, min, max)));
-        dialog.showAndWait().ifPresent(response -> {
+        DialogStyle.showAndWait(dialog).ifPresent(response -> {
             if (response != ButtonType.OK) return;
             try {
                 minPrice = parseOptionalPrice(min.getText(), "Minimum price");
@@ -286,7 +287,7 @@ public class BuyerDashboardController {
                 "Newest", "Price: Low to High", "Price: High to Low"));
         sorter.setValue(sort);
         dialog.getDialogPane().setContent(sorter);
-        dialog.showAndWait().ifPresent(response -> {
+        DialogStyle.showAndWait(dialog).ifPresent(response -> {
             if (response == ButtonType.OK && sorter.getValue() != null) {
                 sort = sorter.getValue();
                 showBrowse();
@@ -537,7 +538,7 @@ public class BuyerDashboardController {
         dialog.setTitle("Make an Offer");
         dialog.setHeaderText("Offer for: " + listing.getTitle());
         dialog.setContentText("Your offer price (HK$):");
-        dialog.showAndWait().ifPresent(priceStr -> {
+        DialogStyle.showAndWait(dialog).ifPresent(priceStr -> {
             try {
                 double price = Double.parseDouble(priceStr.trim());
                 DataService.submitBuyerRequest(listing.getId(), "OFFER", price, null);
@@ -593,7 +594,7 @@ public class BuyerDashboardController {
             event.consume();
             alert(Alert.AlertType.ERROR, error);
         });
-        dialog.showAndWait().ifPresent(response -> {
+        DialogStyle.showAndWait(dialog).ifPresent(response -> {
             if (response != ButtonType.OK) return;
             try {
                 LocalDate start = startDate.getValue();
@@ -632,7 +633,7 @@ public class BuyerDashboardController {
         alert.setTitle("Claim Item");
         alert.setHeaderText("Claim: " + listing.getTitle());
         alert.setContentText("Claim this giveaway? Only the first successful claim is accepted.");
-        alert.showAndWait().ifPresent(response -> {
+        DialogStyle.showAndWait(alert).ifPresent(response -> {
             if (response != ButtonType.OK) return;
             try {
                 DataService.submitBuyerRequest(listing.getId(), "CLAIM", null, null);
@@ -650,7 +651,7 @@ public class BuyerDashboardController {
         Alert confirm = new Alert(Alert.AlertType.CONFIRMATION,
                 "Report this listing? It will be hidden from your marketplace screens.", ButtonType.OK, ButtonType.CANCEL);
         confirm.setHeaderText("Report " + listing.getTitle());
-        confirm.showAndWait().ifPresent(response -> {
+        DialogStyle.showAndWait(confirm).ifPresent(response -> {
             if (response != ButtonType.OK) return;
             try {
                 DataService.reportBuyerListing(listing.getId());
@@ -744,7 +745,7 @@ public class BuyerDashboardController {
         content.setPrefWidth(480);
         dialog.getDialogPane().setContent(content);
         refreshMessages.run();
-        dialog.showAndWait();
+        DialogStyle.showAndWait(dialog);
     }
 
     @FXML
@@ -930,7 +931,7 @@ public class BuyerDashboardController {
         TextField seller = new TextField(dealSeller);
         seller.setPromptText("Seller name");
         dialog.getDialogPane().setContent(new VBox(8, keywordField, categories, types, seller));
-        dialog.showAndWait().ifPresent(response -> {
+        DialogStyle.showAndWait(dialog).ifPresent(response -> {
             if (response != ButtonType.OK) return;
             dealKeyword = keywordField.getText().trim();
             dealCategory = categories.getValue();
@@ -948,7 +949,7 @@ public class BuyerDashboardController {
         ComboBox<String> sorter = new ComboBox<>(FXCollections.observableArrayList("Newest", "Oldest", "Title"));
         sorter.setValue(dealSort);
         dialog.getDialogPane().setContent(sorter);
-        dialog.showAndWait().ifPresent(response -> {
+        DialogStyle.showAndWait(dialog).ifPresent(response -> {
             if (response == ButtonType.OK && sorter.getValue() != null) {
                 dealSort = sorter.getValue();
                 showMyDeals();
@@ -1218,15 +1219,16 @@ public class BuyerDashboardController {
                 Region spacer = new Region();
                 HBox.setHgrow(spacer, Priority.ALWAYS);
                 footer.getChildren().add(styled(notification.getCategory() + " · " + (notification.getTimestamp() == null ? ""
-                        : notification.getTimestamp().format(DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm:ss"))), faint()));
+                        : notification.getTimestamp().format(
+                        DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm:ss", Locale.ENGLISH))), faint()));
                 footer.getChildren().add(spacer);
-                if (listingId != null) {
-                    Button go = new Button("Go ->");
-                    go.getStyleClass().addAll("btn-outline", "btn-sm");
-                    go.addEventFilter(MouseEvent.MOUSE_CLICKED, MouseEvent::consume);
-                    go.setOnAction(event -> openNotificationDeal(notification, deal, listingId));
-                    footer.getChildren().add(go);
-                }
+                Button go = new Button("Go ->");
+                go.getStyleClass().addAll("btn-outline", "btn-sm");
+                go.addEventFilter(MouseEvent.MOUSE_CLICKED, MouseEvent::consume);
+                Map<String, Object> linkedDeal = deal;
+                String linkedListingId = listingId;
+                go.setOnAction(event -> openBuyerNotification(notification, linkedDeal, linkedListingId));
+                footer.getChildren().add(go);
                 item.getChildren().addAll(
                         styled(notification.getTitle(), "-fx-font-weight: bold; -fx-text-fill: #1a1a2e;"),
                         styled(notification.getMessage(), "-fx-text-fill: #5a5a7a; -fx-font-size: 13px;"),
@@ -1234,14 +1236,8 @@ public class BuyerDashboardController {
                 );
                 item.setOnMouseClicked(event -> {
                     if (notification.isRead()) return;
-                    try {
-                        DataService.markBuyerNotificationRead(notification.getId());
-                        notification.setRead(true);
-                        item.setStyle(null);
-                        refreshNotificationDot();
-                    } catch (IllegalStateException | SecurityException ex) {
-                        alert(Alert.AlertType.ERROR, ex.getMessage());
-                    }
+                    if (!markBuyerNotificationRead(notification)) return;
+                    item.setStyle(null);
                 });
                 list.getChildren().add(item);
             }
@@ -1253,17 +1249,81 @@ public class BuyerDashboardController {
         contentPane.getChildren().setAll(scroll(root));
     }
 
-    private void openNotificationDeal(Notification notification, Map<String, Object> deal, String listingId) {
-        try {
-            DataService.markBuyerNotificationRead(notification.getId());
-            refreshNotificationDot();
-        } catch (IllegalStateException | SecurityException ex) {
-            alert(Alert.AlertType.ERROR, ex.getMessage());
+    private void openBuyerNotification(Notification notification, Map<String, Object> deal, String listingId) {
+        if (!markBuyerNotificationRead(notification)) return;
+
+        String title = notification.getTitle() == null ? "" : notification.getTitle().toLowerCase(Locale.ROOT);
+        String category = notification.getCategory() == null ? "" : notification.getCategory().toLowerCase(Locale.ROOT);
+
+        if (listingId != null) {
+            try {
+                Listing listing = DataService.peekBuyerListing(listingId);
+                if (listing != null) {
+                    DetailMode mode = deal == null ? DetailMode.NOTICE
+                            : DataService.isBuyerDealFinished(deal) ? DetailMode.NOTICE_FINISHED : DetailMode.NOTICE;
+                    showListingDetail(listingId, mode);
+                    return;
+                }
+            } catch (IllegalStateException | SecurityException | IllegalArgumentException ignored) {
+                // Fall through to category-based destinations.
+            }
+        }
+
+        if (category.contains("rating") || title.contains("rating") || title.contains("replied")
+                || title.contains("feedback")) {
+            showMyDeals();
             return;
         }
-        DetailMode mode = deal == null ? DetailMode.NOTICE
-                : DataService.isBuyerDealFinished(deal) ? DetailMode.NOTICE_FINISHED : DetailMode.NOTICE;
-        showListingDetail(listingId, mode);
+        if (category.contains("offer") || category.contains("chat") || category.contains("reminder")
+                || category.contains("deal") || title.contains("offer") || title.contains("accepted")
+                || title.contains("declin") || title.contains("counter") || title.contains("borrow")
+                || title.contains("claim") || title.contains("complete") || title.contains("due")) {
+            showMyDeals();
+            return;
+        }
+        if (title.contains("removed") || title.contains("taken down") || title.contains("history")) {
+            showHistory();
+            return;
+        }
+        if (category.contains("announcement") || category.contains("system") || listingId == null) {
+            showBuyerNotificationDetails(notification);
+            return;
+        }
+        showBuyerNotificationDetails(notification);
+    }
+
+    private void showBuyerNotificationDetails(Notification notification) {
+        Dialog<Void> details = new Dialog<>();
+        details.setTitle("Notification");
+        details.setHeaderText(notification.getTitle());
+        Label message = new Label(notification.getMessage() == null ? "" : notification.getMessage());
+        message.setWrapText(true);
+        Label meta = new Label(notification.getCategory() + " · " + (notification.getTimestamp() == null
+                ? "Time not recorded"
+                : notification.getTimestamp().format(
+                DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm:ss", Locale.ENGLISH))));
+        meta.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 12px;");
+        VBox body = new VBox(12, meta, message);
+        body.setPadding(new Insets(16));
+        body.setPrefWidth(480);
+        details.getDialogPane().setContent(body);
+        details.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+        ((Button) details.getDialogPane().lookupButton(ButtonType.CLOSE)).setText("X");
+        DialogStyle.showAndWait(details);
+        showNotifications();
+    }
+
+    private boolean markBuyerNotificationRead(Notification notification) {
+        if (notification.isRead()) return true;
+        try {
+            DataService.markBuyerNotificationRead(notification.getId());
+            notification.setRead(true);
+            refreshNotificationDot();
+            return true;
+        } catch (IllegalStateException | SecurityException ex) {
+            alert(Alert.AlertType.ERROR, ex.getMessage());
+            return false;
+        }
     }
 
     private Map<String, Object> dealForNotification(Notification notification, List<Map<String, Object>> deals) {
@@ -1313,7 +1373,23 @@ public class BuyerDashboardController {
 
     private String listingIdForNotification(Notification notification, Map<String, Object> deal) {
         if (deal != null && deal.get("listing_id") != null) return String.valueOf(deal.get("listing_id"));
-        return notification.getListingId() == null ? null : notification.getListingId().toString();
+        if (notification.getListingId() != null) return notification.getListingId().toString();
+        String message = notification.getMessage() == null ? "" : notification.getMessage();
+        if (message.isBlank()) return null;
+        try {
+            String bestId = null;
+            int bestLength = 0;
+            for (Listing listing : DataService.searchBuyerMarketplace(
+                    "", "All Categories", "All Types", "All Conditions", null, null, "Newest")) {
+                String name = listing.getTitle();
+                if (name == null || name.isBlank() || !message.contains(name) || name.length() <= bestLength) continue;
+                bestId = listing.getId();
+                bestLength = name.length();
+            }
+            return bestId;
+        } catch (IllegalStateException | SecurityException | IllegalArgumentException ex) {
+            return null;
+        }
     }
 
     @FXML
@@ -1371,7 +1447,7 @@ public class BuyerDashboardController {
         comment.setPrefRowCount(3);
         dialog.getDialogPane().setContent(new VBox(8,
                 new Label("Rating from 0.0 to 5.0"), stars, comment));
-        dialog.showAndWait().ifPresent(response -> {
+        DialogStyle.showAndWait(dialog).ifPresent(response -> {
             if (response != ButtonType.OK) return;
             try {
                 DataService.rateCompletedDeal(requestId, stars.getValue(), comment.getText());
@@ -1398,7 +1474,7 @@ public class BuyerDashboardController {
         view.setFitWidth(640);
         view.setFitHeight(480);
         dialog.getDialogPane().setContent(view);
-        dialog.showAndWait();
+        DialogStyle.showAndWait(dialog);
     }
 
     private LocalDate parseDealDate(Map<String, Object> deal) {
@@ -1464,7 +1540,7 @@ public class BuyerDashboardController {
     }
 
     private void alert(Alert.AlertType type, String message) {
-        new Alert(type, message).showAndWait();
+        DialogStyle.showAndWait(new Alert(type, message));
     }
 
     private String formatDate(LocalDateTime value) {

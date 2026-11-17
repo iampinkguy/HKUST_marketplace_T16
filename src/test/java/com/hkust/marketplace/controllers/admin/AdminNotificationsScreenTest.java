@@ -117,10 +117,16 @@ public class AdminNotificationsScreenTest {
             return null;
         });
         fx(() -> {
-            assertNotNull("A single click must open the review dialog", dialog("Review Listing"));
-            assertEquals("Review this book (#" + listingId + ")", dialog("Review Listing").getHeaderText());
-            assertNotNull(dialog("Review Listing").lookup("#approve-listing"));
-            closeDialog("Review Listing", ButtonType.CANCEL);
+            assertEquals("Listing Detail", ((Label) stage.getScene().lookup("#pageTitle")).getText());
+            assertNotNull("A single click must open the inline listing detail", stage.getScene().lookup("#admin-listing-detail"));
+            assertTrue(text(stage.getScene().lookup("#admin-listing-detail")).contains("Review this book (#" + listingId + ")"));
+            assertNotNull(button("approve-listing"));
+            assertNotNull(button("reject-listing"));
+            Platform.runLater(() -> button("close-listing-detail").fire());
+            return null;
+        });
+        fx(() -> {
+            assertEquals("Notification Board", ((Label) stage.getScene().lookup("#pageTitle")).getText());
             return null;
         });
         assertTrue(DataService.getAdminNotifications().stream().filter(n -> n.getId().equals(reviewId)).findFirst().orElseThrow().isRead());
@@ -158,12 +164,19 @@ public class AdminNotificationsScreenTest {
             return null;
         });
         fx(() -> {
-            assertNotNull("A report must open moderation details", dialog("Reported Listing"));
-            assertTrue(text(dialog("Reported Listing")).contains("buyer reported listing #" + listingId));
-            assertTrue(text(dialog("Reported Listing")).contains("Clean pages"));
-            assertTrue(dialog("Reported Listing").getHeaderText().contains("#" + listingId));
-            assertEquals(List.of(ButtonType.CLOSE), dialog("Reported Listing").getButtonTypes());
-            closeDialog("Reported Listing", ButtonType.CLOSE);
+            assertEquals("Listing Detail", ((Label) stage.getScene().lookup("#pageTitle")).getText());
+            Node detail = stage.getScene().lookup("#admin-listing-detail");
+            assertNotNull("A report must open moderation details inline", detail);
+            assertTrue(text(detail).contains("buyer reported listing #" + listingId));
+            assertTrue(text(detail).contains("Clean pages"));
+            assertTrue(text(detail).contains("#" + listingId));
+            assertNull("Reports must not expose approval actions", button("approve-listing"));
+            assertNull(button("reject-listing"));
+            Platform.runLater(() -> button("close-listing-detail").fire());
+            return null;
+        });
+        fx(() -> {
+            assertEquals("Notification Board", ((Label) stage.getScene().lookup("#pageTitle")).getText());
             return null;
         });
     }
