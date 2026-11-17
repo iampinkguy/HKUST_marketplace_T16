@@ -11,11 +11,13 @@ public class Review {
     private String comment;
     private String sellerReply;
     private boolean hidden; // admin can hide
+    private boolean flagged; // seller flagged for admin moderation
     private LocalDateTime createdAt;
 
     public Review() {
         this.createdAt = LocalDateTime.now();
         this.hidden = false;
+        this.flagged = false;
     }
 
     // Getters & Setters
@@ -45,6 +47,9 @@ public class Review {
 
     public boolean isHidden() { return hidden; }
     public void setHidden(boolean hidden) { this.hidden = hidden; }
+
+    public boolean isFlagged() { return flagged; }
+    public void setFlagged(boolean flagged) { this.flagged = flagged; }
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
