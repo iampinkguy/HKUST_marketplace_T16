@@ -470,11 +470,29 @@ public class SellerDashboardController {
         openChat.getStyleClass().add("btn-primary");
         openChat.setOnAction(e -> showSellerListingChat(listing, null));
         actions.getChildren().addAll(edit, openChat);
-        if (listing.getStatus() == ListingStatus.LIVE || listing.getStatus() == ListingStatus.RESERVED) {
-            Button complete = new Button("Mark Complete");
-            complete.getStyleClass().add("btn-gold");
-            complete.setOnAction(e -> markListingComplete(listing));
-            actions.getChildren().add(complete);
+        Map<String, Object> completableDeal = null;
+        try {
+            completableDeal = DataService.getSellerCompletableDeal(listing.getId());
+        } catch (IllegalStateException | SecurityException ignored) {
+            completableDeal = null;
+        }
+        Label completeStatus = new Label();
+        completeStatus.setWrapText(true);
+        completeStatus.setStyle("-fx-text-fill: #8a5a00;");
+        if (completableDeal != null) {
+            if (completableDeal.get("seller_completed_at") != null) {
+                completeStatus.setText("You marked complete. Waiting for the buyer to mark complete.");
+            } else {
+                Button complete = new Button("Mark Complete");
+                complete.getStyleClass().add("btn-gold");
+                complete.setOnAction(e -> markListingComplete(listing));
+                actions.getChildren().add(complete);
+                if (completableDeal.get("buyer_completed_at") != null) {
+                    completeStatus.setText("Buyer already marked complete. Mark complete to finish the listing.");
+                } else {
+                    completeStatus.setText("Both buyer and seller must mark complete to finish this listing.");
+                }
+            }
         }
 
         Label requestsTitle = styled("Incoming offers & requests", "-fx-font-weight: bold;");
@@ -483,8 +501,14 @@ public class SellerDashboardController {
         requestFeedback.setWrapText(true);
         requestFeedback.setStyle("-fx-text-fill: #8a5a00;");
 
-        root.getChildren().addAll(header, photos, facts, actions,
-                requestsTitle, requestFeedback, requests);
+        root.getChildren().add(header);
+        root.getChildren().add(photos);
+        root.getChildren().add(facts);
+        root.getChildren().add(actions);
+        if (completeStatus.getText() != null && !completeStatus.getText().isBlank()) {
+            root.getChildren().add(completeStatus);
+        }
+        root.getChildren().addAll(requestsTitle, requestFeedback, requests);
 
         ScrollPane scroll = new ScrollPane(root);
         scroll.setFitToWidth(true);
@@ -495,15 +519,19 @@ public class SellerDashboardController {
 
     private void markListingComplete(Listing listing) {
         Alert conf = new Alert(Alert.AlertType.CONFIRMATION,
-                "Mark '" + listing.getTitle() + "' as complete? It will no longer be available on the marketplace.",
+                "Mark '" + listing.getTitle()
+                        + "' as complete? The listing finishes only after both you and the buyer mark complete.",
                 ButtonType.CANCEL, ButtonType.OK);
         conf.setHeaderText("Mark listing complete");
         conf.showAndWait().ifPresent(response -> {
             if (response != ButtonType.OK) return;
             try {
-                DataService.completeSellerListing(listing.getId(), listing.getReviewVersion());
-                new Alert(Alert.AlertType.INFORMATION, "Listing marked as complete.").showAndWait();
-                showMyListings();
+                boolean fullyDone = DataService.completeSellerListing(listing.getId(), listing.getReviewVersion());
+                new Alert(Alert.AlertType.INFORMATION, fullyDone
+                        ? "Both sides marked complete. The listing is finished."
+                        : "Your completion is saved. Waiting for the buyer to mark complete.").showAndWait();
+                if (fullyDone) showMyListings();
+                else showListingDetails(listing, false);
             } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
                 showProfileError("Could not complete listing: " + ex.getMessage());
             }
@@ -894,31 +922,115 @@ public class SellerDashboardController {
             return;
         }
 
+        root.getChildren().add(styled(
+                "Select a review to respond or flag it for admin moderation.",
+                "-fx-text-fill: #5a5a7a; -fx-font-size: 13px;"));
+
         if (reviews.isEmpty()) {
             root.getChildren().add(new Label("No reviews yet."));
         } else {
             for (Review r : reviews) {
                 VBox item = new VBox(6);
                 item.getStyleClass().add("card");
-                Label stars = new Label("★".repeat(r.getRating()) + "☆".repeat(5 - r.getRating()));
+                item.setPadding(new Insets(12));
+                Label stars = new Label("★".repeat(Math.max(0, r.getRating())) + "☆".repeat(Math.max(0, 5 - r.getRating())));
                 stars.setStyle("-fx-text-fill: #A68137; -fx-font-size: 16px;");
-                Label comment = new Label(r.getComment());
+                Label comment = new Label(r.getComment() == null || r.getComment().isBlank()
+                        ? "(No written feedback)" : r.getComment());
                 comment.setWrapText(true);
                 Label meta = new Label("by @" + r.getBuyerUsername() + " · " + r.getListingTitle());
                 meta.setStyle("-fx-text-fill: #9aa0b0; -fx-font-size: 12px;");
+                Label replyLabel = styled(
+                        r.getSellerReply() == null || r.getSellerReply().isBlank()
+                                ? "No reply yet."
+                                : "Your reply: " + r.getSellerReply(),
+                        r.getSellerReply() == null || r.getSellerReply().isBlank()
+                                ? "-fx-text-fill: #9aa0b0; -fx-font-size: 12px;"
+                                : "-fx-text-fill: #003974; -fx-font-size: 13px;");
                 HBox actions = new HBox(8);
-                Button reply = new Button("Reply");
+                Button reply = new Button(r.getSellerReply() == null || r.getSellerReply().isBlank()
+                        ? "Respond" : "Edit Reply");
                 reply.getStyleClass().addAll("btn-outline", "btn-sm");
-                reply.setOnAction(e -> new Alert(Alert.AlertType.INFORMATION, "Reply sent to buyer (demo).").showAndWait());
-                Button flag = new Button("Flag");
+                reply.setOnAction(e -> respondToReview(r));
+                Button flag = new Button(r.isFlagged() ? "Flagged" : "Flag");
                 flag.getStyleClass().addAll("btn-danger", "btn-sm");
-                flag.setOnAction(e -> new Alert(Alert.AlertType.INFORMATION, "Review flagged for admin (demo).").showAndWait());
+                flag.setDisable(r.isFlagged());
+                flag.setOnAction(e -> flagReview(r));
                 actions.getChildren().addAll(reply, flag);
-                item.getChildren().addAll(stars, comment, meta, actions);
+                item.getChildren().addAll(stars, comment, meta, replyLabel);
+                if (r.isFlagged()) {
+                    item.getChildren().add(styled("Flagged for admin moderation.",
+                            "-fx-text-fill: #c62828; -fx-font-size: 12px; -fx-font-weight: bold;"));
+                }
+                item.getChildren().add(actions);
                 root.getChildren().add(item);
             }
         }
-        contentPane.getChildren().add(new ScrollPane(root));
+        ScrollPane scroll = new ScrollPane(root);
+        scroll.setFitToWidth(true);
+        scroll.setStyle("-fx-background-color: transparent;");
+        contentPane.getChildren().add(scroll);
+    }
+
+    private void respondToReview(Review review) {
+        String draft = review.getSellerReply() == null ? "" : review.getSellerReply();
+        while (true) {
+            Dialog<ButtonType> dialog = new Dialog<>();
+            dialog.setTitle("Respond to Review");
+            dialog.setHeaderText("Reply to @" + review.getBuyerUsername() + " about " + review.getListingTitle());
+            dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
+            TextArea input = new TextArea(draft);
+            input.setPromptText("Enter a written reply...");
+            input.setPrefRowCount(4);
+            input.setWrapText(true);
+            Label hint = new Label("Your reply will be saved and the buyer will be notified.");
+            hint.setWrapText(true);
+            dialog.getDialogPane().setContent(new VBox(8, hint, input));
+            dialog.setResultConverter(button -> button);
+            var result = dialog.showAndWait();
+            if (result.isEmpty() || result.get() != ButtonType.OK) {
+                showReviews();
+                return;
+            }
+            draft = input.getText() == null ? "" : input.getText();
+            try {
+                DataService.replyToReview(review.getBuyerUsername(), review.getId(), draft);
+                new Alert(Alert.AlertType.INFORMATION,
+                        "Reply submitted. The buyer has been notified.").showAndWait();
+                showReviews();
+                return;
+            } catch (IllegalArgumentException ex) {
+                new Alert(Alert.AlertType.ERROR,
+                        "A reply cannot be empty. Please enter a written reply.").showAndWait();
+            } catch (IllegalStateException | SecurityException ex) {
+                showProfileError(ex.getMessage());
+                showReviews();
+                return;
+            }
+        }
+    }
+
+    private void flagReview(Review review) {
+        Alert confirm = new Alert(Alert.AlertType.CONFIRMATION,
+                "Flag this review by @" + review.getBuyerUsername()
+                        + " as inappropriate? An admin will be notified for moderation.",
+                ButtonType.CANCEL, ButtonType.OK);
+        confirm.setHeaderText("Confirm flag");
+        confirm.showAndWait().ifPresent(response -> {
+            if (response != ButtonType.OK) {
+                showReviews();
+                return;
+            }
+            try {
+                DataService.flagReview(review.getBuyerUsername(), review.getId());
+                new Alert(Alert.AlertType.INFORMATION,
+                        "Review flagged. The report was sent to admin for moderation.").showAndWait();
+                showReviews();
+            } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+                showProfileError(ex.getMessage());
+                showReviews();
+            }
+        });
     }
 
     @FXML

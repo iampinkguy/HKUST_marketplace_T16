@@ -4,6 +4,8 @@ import com.hkust.marketplace.models.*;
 import com.hkust.marketplace.utils.DataService;
 import com.hkust.marketplace.utils.SceneManager;
 import com.hkust.marketplace.utils.SessionManager;
+import javafx.animation.KeyFrame;
+import javafx.animation.Timeline;
 import javafx.collections.FXCollections;
 import javafx.event.ActionEvent;
 import javafx.fxml.FXML;
@@ -12,7 +14,11 @@ import javafx.geometry.Pos;
 import javafx.scene.control.*;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.*;
+import javafx.scene.paint.Color;
+import javafx.scene.shape.Circle;
+import javafx.util.Duration;
 
 import java.nio.file.Path;
 import java.time.LocalDateTime;
@@ -26,17 +32,54 @@ public class AdminDashboardController {
     @FXML private Label pageTitle;
     @FXML private Label welcomeLabel;
     @FXML private Button btnReview, btnAllListings, btnUsers, btnDeals, btnRatings, btnNotifications, btnProfile;
+    @FXML private Circle notifUnreadDot;
 
     private Button currentActiveBtn;
     private String userActionMessage;
     private boolean includeDeletedUsers;
+    private Timeline notificationTicker;
 
     @FXML
     public void initialize() {
         User user = SessionManager.getCurrentUser();
         if (user != null) welcomeLabel.setText("Admin: " + user.getFullName());
         currentActiveBtn = btnReview;
+        ensureNotificationDot();
+        notificationTicker = new Timeline(new KeyFrame(Duration.seconds(2), event -> refreshNotificationDot()));
+        notificationTicker.setCycleCount(Timeline.INDEFINITE);
+        notificationTicker.play();
+        refreshNotificationDot();
         showReview();
+    }
+
+    private void ensureNotificationDot() {
+        if (notifUnreadDot != null) {
+            notifUnreadDot.toFront();
+            return;
+        }
+        if (btnNotifications == null || !(btnNotifications.getParent() instanceof StackPane host)) return;
+        notifUnreadDot = new Circle(6, Color.web("#e53935"));
+        notifUnreadDot.setStroke(Color.WHITE);
+        notifUnreadDot.setStrokeWidth(1.5);
+        notifUnreadDot.setMouseTransparent(true);
+        notifUnreadDot.setVisible(false);
+        StackPane.setAlignment(notifUnreadDot, Pos.TOP_RIGHT);
+        notifUnreadDot.setTranslateX(-14);
+        notifUnreadDot.setTranslateY(10);
+        host.getChildren().add(notifUnreadDot);
+    }
+
+    private void refreshNotificationDot() {
+        ensureNotificationDot();
+        if (notifUnreadDot == null) return;
+        boolean unread = false;
+        try {
+            unread = DataService.hasUnreadNotifications();
+        } catch (IllegalStateException | SecurityException ignored) {
+            unread = false;
+        }
+        notifUnreadDot.setVisible(unread);
+        if (unread) notifUnreadDot.toFront();
     }
 
     private void setActive(Button btn, String title) {
@@ -820,10 +863,22 @@ public class AdminDashboardController {
             Label stars = new Label("★".repeat(r.getRating()) + "☆".repeat(5 - r.getRating()) +
                     "  @" + r.getSellerUsername() + " by @" + r.getBuyerUsername());
             stars.setStyle("-fx-font-weight: bold;");
-            Label comment = new Label(r.getComment());
+            Label comment = new Label(r.getComment() == null || r.getComment().isBlank()
+                    ? "(No written feedback)" : r.getComment());
             comment.setWrapText(true);
             comment.setStyle("-fx-text-fill: #5a5a7a;");
             info.getChildren().addAll(stars, comment);
+            if (r.getSellerReply() != null && !r.getSellerReply().isBlank()) {
+                Label reply = new Label("Seller reply: " + r.getSellerReply());
+                reply.setWrapText(true);
+                reply.setStyle("-fx-text-fill: #003974;");
+                info.getChildren().add(reply);
+            }
+            if (r.isFlagged()) {
+                Label flagged = new Label("Flagged by seller for moderation");
+                flagged.setStyle("-fx-text-fill: #c62828; -fx-font-weight: bold;");
+                info.getChildren().add(flagged);
+            }
 
             Button hide = new Button(r.isHidden() ? "Unhide" : "Hide");
             hide.getStyleClass().addAll("btn-outline", "btn-sm");
@@ -856,6 +911,7 @@ public class AdminDashboardController {
         } catch (IllegalStateException | SecurityException ex) {
             root.getChildren().add(new Label("Could not load notifications: " + ex.getMessage()));
             contentPane.getChildren().add(new ScrollPane(root));
+            refreshNotificationDot();
             return;
         }
         if (notifs.isEmpty()) {
@@ -864,21 +920,98 @@ public class AdminDashboardController {
             for (Notification n : notifs) {
                 VBox item = new VBox(4);
                 item.getStyleClass().add("notif-item");
+                if (!n.isRead()) item.setStyle("-fx-border-color: #003974; -fx-border-width: 0 0 0 3;");
                 Label t = new Label(n.getTitle());
                 t.setStyle("-fx-font-weight: bold;");
                 Label m = new Label(n.getMessage());
                 m.setWrapText(true);
                 m.setStyle("-fx-text-fill: #5a5a7a;");
+                HBox footer = new HBox(8);
+                footer.setAlignment(Pos.CENTER_LEFT);
+                Region spacer = new Region();
+                HBox.setHgrow(spacer, Priority.ALWAYS);
                 Label meta = new Label(n.getCategory() + " · " +
-                        n.getTimestamp().format(DateTimeFormatter.ofPattern("dd MMM HH:mm")));
+                        (n.getTimestamp() == null ? ""
+                                : n.getTimestamp().format(DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm",
+                                java.util.Locale.ENGLISH))));
                 meta.setStyle("-fx-text-fill: #9aa0b0; -fx-font-size: 11px;");
-                item.getChildren().addAll(t, m, meta);
+                footer.getChildren().addAll(meta, spacer);
+                if (canGoFromAdminNotification(n)) {
+                    Button go = new Button("Go ->");
+                    go.getStyleClass().addAll("btn-outline", "btn-sm");
+                    go.addEventFilter(MouseEvent.MOUSE_CLICKED, MouseEvent::consume);
+                    go.setOnAction(event -> openAdminNotification(n));
+                    footer.getChildren().add(go);
+                }
+                item.getChildren().addAll(t, m, footer);
+                item.setOnMouseClicked(event -> {
+                    if (n.isRead()) return;
+                    if (!markAdminNotificationRead(n)) return;
+                    item.setStyle(null);
+                });
                 root.getChildren().add(item);
             }
         }
+        refreshNotificationDot();
         ScrollPane scroll = new ScrollPane(root);
         scroll.setFitToWidth(true);
         contentPane.getChildren().add(scroll);
+    }
+
+    private boolean canGoFromAdminNotification(Notification notification) {
+        if (notification.getListingId() != null) return true;
+        String title = notification.getTitle() == null ? "" : notification.getTitle().toLowerCase();
+        return title.contains("listing") || title.contains("flagged") || title.contains("moderation")
+                || title.contains("review");
+    }
+
+    private void openAdminNotification(Notification notification) {
+        if (!markAdminNotificationRead(notification)) return;
+        String title = notification.getTitle() == null ? "" : notification.getTitle().toLowerCase();
+        if (title.contains("flagged") || title.contains("moderation")) {
+            showRatings();
+            return;
+        }
+        if (notification.getListingId() != null) {
+            String listingId = Integer.toString(notification.getListingId());
+            try {
+                Listing listing = DataService.getListingForAdmin(listingId);
+                if (listing != null && listing.getStatus() == ListingStatus.PENDING_REVIEW) {
+                    showListingDetails(listing);
+                    return;
+                }
+                if (listing != null) {
+                    showAllListings();
+                    new Alert(Alert.AlertType.INFORMATION,
+                            "Opened All Listings. \"" + listing.getTitle()
+                                    + "\" is currently " + listing.getStatus().name().replace('_', ' ') + ".")
+                            .showAndWait();
+                    return;
+                }
+            } catch (IllegalStateException | SecurityException | IllegalArgumentException ex) {
+                new Alert(Alert.AlertType.ERROR, ex.getMessage()).showAndWait();
+                showNotifications();
+                return;
+            }
+        }
+        if (title.contains("listing") || title.contains("review")) {
+            showReview();
+            return;
+        }
+        showNotifications();
+    }
+
+    private boolean markAdminNotificationRead(Notification notification) {
+        if (notification.isRead()) return true;
+        try {
+            DataService.markCurrentUserNotificationRead(notification.getId());
+            notification.setRead(true);
+            refreshNotificationDot();
+            return true;
+        } catch (IllegalStateException | SecurityException ex) {
+            new Alert(Alert.AlertType.ERROR, ex.getMessage()).showAndWait();
+            return false;
+        }
     }
 
     @FXML

@@ -292,9 +292,15 @@ public class DataService {
         DatabaseManager.deleteSellerListing(listingId, sellerUsername, expectedVersion);
     }
 
-    public static void completeSellerListing(String listingId, long expectedVersion) {
+    /** @return true if both buyer and seller have confirmed and the listing deal is fully completed */
+    public static boolean completeSellerListing(String listingId, long expectedVersion) {
         String sellerUsername = requireSeller();
-        DatabaseManager.completeSellerListing(listingId, sellerUsername, expectedVersion);
+        return DatabaseManager.completeSellerListing(listingId, sellerUsername, expectedVersion);
+    }
+
+    public static Map<String, Object> getSellerCompletableDeal(String listingId) {
+        String sellerUsername = requireSeller();
+        return DatabaseManager.fetchSellerCompletableDeal(listingId, sellerUsername);
     }
 
     private static void validateListingDetails(Listing listing) {
@@ -1046,8 +1052,9 @@ public class DataService {
         DatabaseManager.returnBorrow(requireBuyer(), requestId, false);
     }
 
-    public static void completeBuyerDeal(int requestId) {
-        DatabaseManager.completeBuyerDeal(requireBuyer(), requestId);
+    /** @return true if both buyer and seller have confirmed and the deal is fully completed */
+    public static boolean completeBuyerDeal(int requestId) {
+        return DatabaseManager.completeBuyerDeal(requireBuyer(), requestId);
     }
 
     public static void rateCompletedDeal(int requestId, double rating, String reviewText) {
@@ -1084,6 +1091,10 @@ public class DataService {
         DatabaseManager.markNotificationRead(requireBuyer(), notificationId);
     }
 
+    public static void markCurrentUserNotificationRead(String notificationId) {
+        DatabaseManager.markNotificationRead(requireAuthenticatedUser(), notificationId);
+    }
+
     public static boolean isBuyerDealFinished(Map<String, Object> deal) {
         return deal.get("completed_at") != null || deal.get("returned_at") != null
                 || "DECLINED".equals(deal.get("status"));
@@ -1091,6 +1102,26 @@ public class DataService {
 
     public static List<Review> getReviewsForCurrentSeller() {
         return mapReviews(DatabaseManager.fetchSellerReviews(requireSeller()));
+    }
+
+    public static void replyToReview(String buyerUsername, String listingId, String replyText) {
+        String seller = requireSeller();
+        if (buyerUsername == null || buyerUsername.isBlank() || listingId == null || listingId.isBlank()) {
+            throw new IllegalArgumentException("Buyer and listing are required.");
+        }
+        DatabaseManager.replyToSellerReview(seller, buyerUsername, parseListingId(listingId), replyText);
+    }
+
+    public static void flagReview(String buyerUsername, String listingId) {
+        String seller = requireSeller();
+        if (buyerUsername == null || buyerUsername.isBlank() || listingId == null || listingId.isBlank()) {
+            throw new IllegalArgumentException("Buyer and listing are required.");
+        }
+        DatabaseManager.flagSellerReview(seller, buyerUsername, parseListingId(listingId));
+    }
+
+    public static List<Review> getBuyerReviews() {
+        return mapReviews(DatabaseManager.fetchBuyerReviews(requireBuyer()));
     }
 
     public static List<Review> getAllReviews() {
@@ -1150,6 +1181,7 @@ public class DataService {
             double score = row.get("rating") instanceof Number number ? number.doubleValue() : 0;
             review.setRating((int) Math.max(0, Math.min(5, Math.round(score))));
             review.setHidden(row.get("hidden") instanceof Number number && number.intValue() != 0);
+            review.setFlagged(row.get("flagged") instanceof Number number && number.intValue() != 0);
             if (row.get("created_at") != null) review.setCreatedAt(parseDate(row.get("created_at").toString()));
             reviews.add(review);
         }
