@@ -131,9 +131,19 @@ public class SellerDashboardController {
     }
 
     private String requestDescription(Map<String, Object> request) {
-        return switch ((String) request.get("request_type")) {
-            case "OFFER" -> "Offer: HK$" + request.get("offer_price");
-            case "BORROW" -> "Borrow request: " + request.get("proposed_days") + " days";
+        String type = (String) request.get("request_type");
+        return switch (type == null ? "" : type) {
+            case "OFFER" -> {
+                String text = "Offer: HK$" + request.get("offer_price");
+                if (request.get("counter_price") != null) {
+                    text += " · Counter HK$" + request.get("counter_price");
+                }
+                yield text;
+            }
+            case "BORROW" -> {
+                Object days = request.get("proposed_days");
+                yield "Borrow request: " + days + (Integer.valueOf(1).equals(days) ? " day" : " days");
+            }
             case "CLAIM" -> "Giveaway claim";
             default -> "Request";
         };
@@ -147,7 +157,7 @@ public class SellerDashboardController {
 
         VBox info = new VBox(4);
         HBox.setHgrow(info, Priority.ALWAYS);
-        Label title = new Label(l.getTitle());
+        Label title = new Label(l.getTitle() + " (#" + l.getId() + ")");
         title.setStyle("-fx-font-weight: bold; -fx-font-size: 15px;");
         Label meta = new Label(l.getCategory() + " · " + l.getTypeDisplay() + " · " + l.getMeetupLocation());
         meta.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 12px;");
@@ -162,12 +172,28 @@ public class SellerDashboardController {
             default -> status.getStyleClass().add("badge-sold");
         }
 
+        boolean mutable = false;
+        try {
+            mutable = DataService.canSellerModifyListing(l.getId());
+        } catch (IllegalStateException | SecurityException ignored) {
+            mutable = false;
+        }
+        if (!mutable) {
+            Label locked = new Label(
+                    "Edit/Delete locked while reserved/sold/lent/given/removed, or while offers/deals are active. Resolve them first.");
+            locked.setStyle("-fx-text-fill: #8a5a00; -fx-font-size: 11px;");
+            locked.setWrapText(true);
+            info.getChildren().add(locked);
+        }
+
         Button editBtn = new Button("Edit");
         editBtn.getStyleClass().addAll("btn-outline", "btn-sm");
+        editBtn.setDisable(!mutable);
         editBtn.setOnAction(e -> showListingForm(l));
 
         Button delBtn = new Button("Delete");
         delBtn.getStyleClass().addAll("btn-danger", "btn-sm");
+        delBtn.setDisable(!mutable);
         delBtn.setOnAction(e -> {
             Alert conf = new Alert(Alert.AlertType.CONFIRMATION,
                     "Permanently delete '" + l.getTitle() + "'?", ButtonType.CANCEL, ButtonType.OK);
@@ -178,7 +204,7 @@ public class SellerDashboardController {
                         DataService.deleteSellerListing(l.getId(), l.getReviewVersion());
                         DialogStyle.showAndWait(new Alert(Alert.AlertType.INFORMATION, "Listing deleted successfully."));
                         showMyListings();
-                    } catch (IllegalStateException | SecurityException ex) {
+                    } catch (IllegalStateException | SecurityException | IllegalArgumentException ex) {
                         showProfileError("Could not delete listing: " + ex.getMessage());
                     }
                 }
@@ -466,6 +492,13 @@ public class SellerDashboardController {
         HBox actions = new HBox(8);
         Button edit = new Button("Edit Listing");
         edit.getStyleClass().add("btn-primary");
+        boolean canEdit = false;
+        try {
+            canEdit = DataService.canSellerModifyListing(listing.getId());
+        } catch (IllegalStateException | SecurityException ignored) {
+            canEdit = false;
+        }
+        edit.setDisable(!canEdit);
         edit.setOnAction(e -> showListingForm(listing));
         Button openChat = new Button("Open Chat Room");
         openChat.getStyleClass().add("btn-primary");
@@ -598,6 +631,10 @@ public class SellerDashboardController {
         });
         Label feedback = new Label();
         feedback.setWrapText(true);
+        Label offerStatus = new Label();
+        offerStatus.setWrapText(true);
+        offerStatus.setStyle("-fx-text-fill: #8a5a00;");
+        HBox offerActions = new HBox(8);
         TextArea input = new TextArea();
         input.setPromptText("Reply to the buyer...");
         input.setPrefRowCount(2);
@@ -606,12 +643,14 @@ public class SellerDashboardController {
         Button send = new Button("Send");
         send.getStyleClass().add("btn-gold");
 
+        Runnable[] reloadOfferActions = new Runnable[1];
         Runnable reloadMessages = () -> {
             try {
                 String buyer = buyerSelector.getValue();
                 if (buyer == null) {
                     messages.getItems().clear();
                     feedback.setText("Select a buyer to view their chat.");
+                    if (reloadOfferActions[0] != null) reloadOfferActions[0].run();
                     return;
                 }
                 ChatHistory history = DataService.getSellerListingChat(listing.getId(), buyer);
@@ -635,8 +674,94 @@ public class SellerDashboardController {
                 } else {
                     feedback.setText("");
                 }
+                if (reloadOfferActions[0] != null) reloadOfferActions[0].run();
             } catch (IllegalStateException | SecurityException e) {
                 feedback.setText("Could not load chat: " + e.getMessage());
+            }
+        };
+        reloadOfferActions[0] = () -> {
+            offerActions.getChildren().clear();
+            offerStatus.setText("");
+            String buyer = buyerSelector.getValue();
+            if (buyer == null) return;
+            try {
+                Map<String, Object> open = DataService.getOpenListingRequestForBuyer(listing.getId(), buyer);
+                if (open == null || !"PENDING".equals(String.valueOf(open.get("status")))) {
+                    offerStatus.setText(open == null
+                            ? "No pending offer from this buyer. Waiting for their offer."
+                            : "Waiting for the buyer to respond to your counter.");
+                    return;
+                }
+                int requestId = ((Number) open.get("request_id")).intValue();
+                String requestType = String.valueOf(open.get("request_type"));
+                offerStatus.setText("Pending " + requestDescription(open) + " — respond in this chat room.");
+                Button accept = new Button("Accept Offer");
+                accept.getStyleClass().add("btn-gold");
+                Button decline = new Button("Decline");
+                decline.getStyleClass().add("btn-danger");
+                accept.setOnAction(event -> {
+                    try {
+                        DataService.resolveSellerRequest(requestId, "ACCEPT", null, null);
+                        DataService.sendSellerListingChatMessage(listing.getId(), buyer,
+                                "[Formal] Offer accepted.");
+                        feedback.setText("Offer accepted. The buyer has been notified.");
+                        reloadMessages.run();
+                    } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
+                        feedback.setText("Could not accept: " + e.getMessage());
+                    }
+                });
+                decline.setOnAction(event -> {
+                    try {
+                        DataService.resolveSellerRequest(requestId, "DECLINE", null, null);
+                        DataService.sendSellerListingChatMessage(listing.getId(), buyer,
+                                "[Formal] Offer declined.");
+                        feedback.setText("Offer declined. The buyer has been notified.");
+                        reloadMessages.run();
+                    } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
+                        feedback.setText("Could not decline: " + e.getMessage());
+                    }
+                });
+                offerActions.getChildren().addAll(accept, decline);
+                if ("OFFER".equals(requestType) || "BORROW".equals(requestType)) {
+                    Button counter = new Button("Counter");
+                    counter.getStyleClass().add("btn-outline");
+                    counter.setOnAction(event -> {
+                        boolean borrow = "BORROW".equals(requestType);
+                        TextInputDialog dialog = new TextInputDialog();
+                        dialog.setTitle("Counter in Chat");
+                        dialog.setHeaderText(borrow
+                                ? "Counter this borrow request with a different period."
+                                : "Counter this offer with a different price.");
+                        dialog.setContentText(borrow ? "Counter days:" : "Counter price (HK$):");
+                        DialogStyle.showAndWait(dialog).ifPresent(raw -> {
+                            try {
+                                String value = raw == null ? "" : raw.trim();
+                                if (borrow) {
+                                    int days = Integer.parseInt(value);
+                                    DataService.resolveSellerRequest(requestId, "COUNTER", null, days);
+                                    DataService.sendSellerListingChatMessage(listing.getId(), buyer,
+                                            "[Formal counter] " + days + (days == 1 ? " day" : " days"));
+                                } else {
+                                    double price = Double.parseDouble(value);
+                                    DataService.resolveSellerRequest(requestId, "COUNTER", price, null);
+                                    DataService.sendSellerListingChatMessage(listing.getId(), buyer,
+                                            "[Formal counter] HK$" + String.format(Locale.ROOT, "%.2f", price));
+                                }
+                                feedback.setText("Counter sent in chat. Waiting for the buyer.");
+                                reloadMessages.run();
+                            } catch (NumberFormatException ex) {
+                                feedback.setText(borrow
+                                        ? "Enter a whole number of counter days."
+                                        : "Enter a valid counter price.");
+                            } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
+                                feedback.setText("Could not counter: " + e.getMessage());
+                            }
+                        });
+                    });
+                    offerActions.getChildren().add(counter);
+                }
+            } catch (IllegalStateException | SecurityException e) {
+                offerStatus.setText("Could not load offer state: " + e.getMessage());
             }
         };
         Runnable reloadBuyers = () -> {
@@ -685,6 +810,8 @@ public class SellerDashboardController {
                 new Label("Chat history is kept. Search does not delete messages."),
                 search,
                 messages,
+                offerStatus,
+                offerActions,
                 feedback,
                 input,
                 new HBox(8, refresh, send));
@@ -719,12 +846,22 @@ public class SellerDashboardController {
                 chat.getStyleClass().add("btn-outline");
                 int requestId = ((Number) request.get("request_id")).intValue();
                 String buyerUsername = String.valueOf(request.get("buyer_username"));
+                String requestType = String.valueOf(request.get("request_type"));
                 accept.setOnAction(event -> resolveListingRequest(
-                        listing, requestId, "ACCEPT", null, requests, feedback));
+                        listing, requestId, "ACCEPT", null, null, requests, feedback));
                 decline.setOnAction(event -> resolveListingRequest(
-                        listing, requestId, "DECLINE", null, requests, feedback));
+                        listing, requestId, "DECLINE", null, null, requests, feedback));
                 chat.setOnAction(event -> showSellerListingChat(listing, buyerUsername));
-                card.getChildren().addAll(buyer, summary, new HBox(8, accept, decline, chat));
+                HBox actions = new HBox(8, accept, decline);
+                if ("OFFER".equals(requestType) || "BORROW".equals(requestType)) {
+                    Button counter = new Button("Counter");
+                    counter.getStyleClass().addAll("btn-outline");
+                    counter.setOnAction(event -> promptCounterOffer(
+                            listing, requestId, requestType, requests, feedback));
+                    actions.getChildren().add(counter);
+                }
+                actions.getChildren().add(chat);
+                card.getChildren().addAll(buyer, summary, actions);
                 requests.getChildren().add(card);
             }
         } catch (IllegalStateException | SecurityException e) {
@@ -732,10 +869,37 @@ public class SellerDashboardController {
         }
     }
 
+    private void promptCounterOffer(Listing listing, int requestId, String requestType,
+                                    VBox requests, Label feedback) {
+        boolean borrow = "BORROW".equals(requestType);
+        TextInputDialog dialog = new TextInputDialog();
+        dialog.setTitle("Counter Offer");
+        dialog.setHeaderText(borrow
+                ? "Propose a different lending period for this borrow request."
+                : "Propose a different price for this sale offer.");
+        dialog.setContentText(borrow ? "Counter days:" : "Counter price (HK$):");
+        DialogStyle.showAndWait(dialog).ifPresent(raw -> {
+            try {
+                String value = raw == null ? "" : raw.trim();
+                if (borrow) {
+                    int days = Integer.parseInt(value);
+                    resolveListingRequest(listing, requestId, "COUNTER", null, days, requests, feedback);
+                } else {
+                    double price = Double.parseDouble(value);
+                    resolveListingRequest(listing, requestId, "COUNTER", price, null, requests, feedback);
+                }
+            } catch (NumberFormatException ex) {
+                feedback.setText(borrow
+                        ? "Enter a whole number of counter days."
+                        : "Enter a valid counter price.");
+            }
+        });
+    }
+
     private void resolveListingRequest(Listing listing, int requestId, String action, Double price,
-                                       VBox requests, Label feedback) {
+                                       Integer counterDays, VBox requests, Label feedback) {
         try {
-            DataService.resolveSellerRequest(requestId, action, price);
+            DataService.resolveSellerRequest(requestId, action, price, counterDays);
             feedback.setText(switch (action) {
                 case "ACCEPT" -> "Request accepted. The buyer has been notified.";
                 case "DECLINE" -> "Request declined. The buyer has been notified.";
@@ -834,13 +998,24 @@ public class SellerDashboardController {
         }
 
         int totalViews = myListings.stream().mapToInt(Listing::getViewCount).sum();
+        int offersReceived = 0;
+        int completedDeals = 0;
+        try {
+            Map<String, Integer> activity = DataService.getSellerActivityStats();
+            offersReceived = activity.getOrDefault("offers", 0);
+            completedDeals = activity.getOrDefault("completed", 0);
+        } catch (IllegalStateException | SecurityException ignored) {
+            // Keep zeros if stats cannot be loaded.
+        }
 
         HBox metrics = new HBox(16);
         metrics.getChildren().addAll(
                 metricCard("Listings", String.valueOf(myListings.size()), "#003974"),
+                metricCard("Views", String.valueOf(totalViews), "#1565c0"),
+                metricCard("Offers received", String.valueOf(offersReceived), "#6a1b9a"),
+                metricCard("Completed deals", String.valueOf(completedDeals), "#00838f"),
                 metricCard("Avg Rating", String.format("%.1f", user != null ? user.getAverageRating() : 0), "#A68137"),
-                metricCard("Reviews", String.valueOf(user != null ? user.getRatingCount() : 0), "#2e7d32"),
-                metricCard("Views", String.valueOf(totalViews), "#1565c0")
+                metricCard("Reviews", String.valueOf(user != null ? user.getRatingCount() : 0), "#2e7d32")
         );
         root.getChildren().add(metrics);
 
