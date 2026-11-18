@@ -569,6 +569,11 @@ public class BuyerDashboardController {
         DatePicker endDate = new DatePicker(today.plusDays(1));
         Label lengthLabel = new Label();
         lengthLabel.setWrapText(true);
+        Label testHint = new Label("For testing, minimum borrow time is 5 seconds. Use the test button below.");
+        testHint.setWrapText(true);
+        testHint.setStyle("-fx-text-fill: #8a5a00;");
+        Button testBorrow = new Button("Request 5-second test borrow");
+        testBorrow.getStyleClass().add("btn-gold");
         Runnable showLength = () -> {
             String error = borrowDateError(startDate.getValue(), endDate.getValue(), lendingDays);
             if (error != null) {
@@ -576,26 +581,14 @@ public class BuyerDashboardController {
                 return;
             }
             long days = ChronoUnit.DAYS.between(startDate.getValue(), endDate.getValue());
-            lengthLabel.setText(lendingPeriodText((int) days) + " selected. You can borrow for 1 to "
+            lengthLabel.setText(lendingPeriodText((int) days) + " selected. You can borrow for "
+                    + DatabaseManager.MIN_BORROW_SECONDS + " seconds up to "
                     + lendingPeriodText(lendingDays) + ".");
         };
         startDate.valueProperty().addListener((obs, oldValue, newValue) -> showLength.run());
         endDate.valueProperty().addListener((obs, oldValue, newValue) -> showLength.run());
         showLength.run();
-        dialog.getDialogPane().setContent(new VBox(8,
-                new Label("The seller lends this item for up to " + lendingPeriodText(lendingDays) + "."),
-                new Label("Start date"), startDate,
-                new Label("End date"), endDate,
-                lengthLabel));
-        Button ok = (Button) dialog.getDialogPane().lookupButton(ButtonType.OK);
-        ok.addEventFilter(ActionEvent.ACTION, event -> {
-            String error = borrowDateError(startDate.getValue(), endDate.getValue(), lendingDays);
-            if (error == null) return;
-            event.consume();
-            alert(Alert.AlertType.ERROR, error);
-        });
-        DialogStyle.showAndWait(dialog).ifPresent(response -> {
-            if (response != ButtonType.OK) return;
+        Runnable submitDates = () -> {
             try {
                 LocalDate start = startDate.getValue();
                 LocalDate end = endDate.getValue();
@@ -609,6 +602,40 @@ public class BuyerDashboardController {
             } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
                 alert(Alert.AlertType.ERROR, ex.getMessage());
             }
+        };
+        testBorrow.setOnAction(event -> {
+            try {
+                LocalDateTime start = LocalDateTime.now();
+                LocalDateTime end = start.plusSeconds(DatabaseManager.MIN_BORROW_SECONDS);
+                DataService.submitBorrowRequest(listing.getId(), start, end);
+                DataService.sendBuyerListingChatMessage(listing.getId(),
+                        "[Formal borrow request] 5-second test borrow until " + end);
+                dialog.setResult(ButtonType.CANCEL);
+                dialog.close();
+                alert(Alert.AlertType.INFORMATION,
+                        "5-second test borrow request sent to " + listing.getSellerFullName() + ".");
+                if (afterSuccess != null) afterSuccess.run();
+            } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+                alert(Alert.AlertType.ERROR, ex.getMessage());
+            }
+        });
+        dialog.getDialogPane().setContent(new VBox(8,
+                new Label("The seller lends this item for up to " + lendingPeriodText(lendingDays) + "."),
+                new Label("Start date"), startDate,
+                new Label("End date"), endDate,
+                lengthLabel,
+                testHint,
+                testBorrow));
+        Button ok = (Button) dialog.getDialogPane().lookupButton(ButtonType.OK);
+        ok.addEventFilter(ActionEvent.ACTION, event -> {
+            String error = borrowDateError(startDate.getValue(), endDate.getValue(), lendingDays);
+            if (error == null) return;
+            event.consume();
+            alert(Alert.AlertType.ERROR, error);
+        });
+        DialogStyle.showAndWait(dialog).ifPresent(response -> {
+            if (response != ButtonType.OK) return;
+            submitDates.run();
         });
     }
 
@@ -616,7 +643,7 @@ public class BuyerDashboardController {
         if (start == null || end == null) return "Choose a start date and an end date.";
         if (start.isBefore(LocalDate.now())) return "Borrow start date cannot be in the past.";
         long days = ChronoUnit.DAYS.between(start, end);
-        if (days < 1) return "Borrow at least 1 day.";
+        if (days < 1) return "Borrow at least 1 day, or use the 5-second test borrow button.";
         if (days > lendingDays) {
             return "You can borrow this item for at most " + lendingPeriodText(lendingDays) + ".";
         }
@@ -693,7 +720,12 @@ public class BuyerDashboardController {
         input.setPrefRowCount(3);
         Button send = new Button("Send");
         send.getStyleClass().add("btn-primary");
+        Label offerStatus = new Label();
+        offerStatus.setWrapText(true);
+        offerStatus.setStyle("-fx-text-fill: #8a5a00;");
+        HBox offerActions = new HBox(8);
 
+        Runnable[] refreshOfferActions = new Runnable[1];
         Runnable refreshMessages = () -> {
             try {
                 ChatHistory history = DataService.getBuyerListingChat(listing.getId());
@@ -708,8 +740,70 @@ public class BuyerDashboardController {
                 }
                 messageList.getItems().setAll(messages);
                 if (!messageList.getItems().isEmpty()) messageList.scrollTo(messageList.getItems().size() - 1);
+                if (refreshOfferActions[0] != null) refreshOfferActions[0].run();
             } catch (IllegalStateException | SecurityException ex) {
                 alert(Alert.AlertType.ERROR, "Could not load chat: " + ex.getMessage());
+            }
+        };
+        refreshOfferActions[0] = () -> {
+            offerActions.getChildren().clear();
+            offerStatus.setText("");
+            if (!allowFormalAction) return;
+            try {
+                Map<String, Object> open = DataService.getOpenListingRequest(listing.getId());
+                String status = open == null ? null : String.valueOf(open.get("status"));
+                if ("COUNTERED".equals(status)) {
+                    String detail = open.get("counter_price") != null
+                            ? "Seller countered at HK$" + trimNumber(open.get("counter_price"))
+                            : "Seller countered with " + open.get("proposed_days") + " day(s)";
+                    offerStatus.setText(detail + ". Accept their counter or send your own counter in chat.");
+                    Button acceptCounter = new Button("Accept Counter");
+                    acceptCounter.getStyleClass().add("btn-gold");
+                    acceptCounter.setOnAction(event -> {
+                        try {
+                            int requestId = ((Number) open.get("request_id")).intValue();
+                            DataService.acceptSellerCounter(requestId);
+                            String note = open.get("counter_price") != null
+                                    ? "[Formal] Accepted seller counter at HK$" + trimNumber(open.get("counter_price"))
+                                    : "[Formal] Accepted seller counter (" + open.get("proposed_days") + " day(s))";
+                            DataService.sendBuyerListingChatMessage(listing.getId(), note);
+                            alert(Alert.AlertType.INFORMATION, "You accepted the seller's counter. The deal is confirmed.");
+                            refreshMessages.run();
+                        } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+                            alert(Alert.AlertType.ERROR, ex.getMessage());
+                        }
+                    });
+                    Button counterBack = new Button(listing.getType() == ListingType.LEND
+                            ? "Counter Borrow" : "Counter Offer");
+                    counterBack.getStyleClass().add("btn-outline");
+                    counterBack.setOnAction(event -> {
+                        Runnable after = refreshMessages::run;
+                        if (listing.getType() == ListingType.LEND) borrowPeriod(listing, after);
+                        else offerPrice(listing, after);
+                    });
+                    offerActions.getChildren().addAll(acceptCounter, counterBack);
+                    return;
+                }
+                if ("PENDING".equals(status)) {
+                    offerStatus.setText("Your offer is pending. Waiting for the seller to Accept / Decline / Counter in chat.");
+                }
+                Button formal = new Button(switch (listing.getType()) {
+                    case SELL -> open == null ? "Make Offer" : "Update Offer";
+                    case LEND -> open == null ? "Request Borrow" : "Update Borrow Request";
+                    case GIVEAWAY -> "Claim Item";
+                });
+                formal.getStyleClass().add("btn-gold");
+                formal.setOnAction(event -> {
+                    Runnable after = refreshMessages::run;
+                    switch (listing.getType()) {
+                        case SELL -> offerPrice(listing, after);
+                        case LEND -> borrowPeriod(listing, after);
+                        case GIVEAWAY -> claimItem(listing, after);
+                    }
+                });
+                offerActions.getChildren().add(formal);
+            } catch (IllegalStateException | SecurityException ex) {
+                offerStatus.setText("Could not load offer state: " + ex.getMessage());
             }
         };
         search.textProperty().addListener((obs, old, value) -> refreshMessages.run());
@@ -724,24 +818,7 @@ public class BuyerDashboardController {
         });
 
         VBox content = new VBox(8, new Label("Chat history is kept. Search does not delete messages."),
-                search, messageList, input, send);
-        if (allowFormalAction) {
-            Button formal = new Button(switch (listing.getType()) {
-                case SELL -> "Make Offer";
-                case LEND -> "Request Borrow";
-                case GIVEAWAY -> "Claim Item";
-            });
-            formal.getStyleClass().add("btn-gold");
-            formal.setOnAction(event -> {
-                Runnable refresh = refreshMessages::run;
-                switch (listing.getType()) {
-                    case SELL -> offerPrice(listing, refresh);
-                    case LEND -> borrowPeriod(listing, refresh);
-                    case GIVEAWAY -> claimItem(listing, refresh);
-                }
-            });
-            content.getChildren().add(formal);
-        }
+                search, messageList, offerStatus, offerActions, input, send);
         content.setPrefWidth(480);
         dialog.getDialogPane().setContent(content);
         refreshMessages.run();

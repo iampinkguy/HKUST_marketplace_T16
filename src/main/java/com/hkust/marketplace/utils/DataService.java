@@ -293,6 +293,24 @@ public class DataService {
         DatabaseManager.deleteSellerListing(listingId, sellerUsername, expectedVersion);
     }
 
+    /**
+     * Strict rule: seller may edit/delete only with no PENDING/COUNTERED/ACCEPTED offers
+     * and listing not reserved/sold/lent/given/removed.
+     */
+    public static boolean canSellerModifyListing(String listingId) {
+        String seller = requireSeller();
+        return DatabaseManager.canSellerModifyListing(seller, parseListingId(listingId));
+    }
+
+    public static boolean listingHasOpenOffers(String listingId) {
+        String seller = requireSeller();
+        return DatabaseManager.listingHasOpenOffers(seller, parseListingId(listingId));
+    }
+
+    public static Map<String, Integer> getSellerActivityStats() {
+        return DatabaseManager.fetchSellerActivityStats(requireSeller());
+    }
+
     /** @return true if both buyer and seller have confirmed and the listing deal is fully completed */
     public static boolean completeSellerListing(String listingId, long expectedVersion) {
         String sellerUsername = requireSeller();
@@ -398,12 +416,42 @@ public class DataService {
     }
 
     public static void resolveSellerRequest(int requestId, String action, Double counterPrice) {
+        resolveSellerRequest(requestId, action, counterPrice, null);
+    }
+
+    public static void resolveSellerRequest(int requestId, String action, Double counterPrice,
+                                            Integer counterDays) {
         String seller = requireSeller();
-        if ("COUNTER".equalsIgnoreCase(action)
-                && (counterPrice == null || !Double.isFinite(counterPrice) || counterPrice <= 0)) {
-            throw new IllegalArgumentException("Enter a valid positive counteroffer.");
+        if ("COUNTER".equalsIgnoreCase(action)) {
+            boolean priced = counterPrice != null && Double.isFinite(counterPrice) && counterPrice > 0;
+            boolean timed = counterDays != null && counterDays > 0;
+            if (!priced && !timed) {
+                throw new IllegalArgumentException("Enter a valid positive counteroffer.");
+            }
         }
-        DatabaseManager.resolveListingRequest(seller, requestId, action, counterPrice);
+        DatabaseManager.resolveListingRequest(seller, requestId, action, counterPrice, counterDays);
+    }
+
+    /** Latest PENDING or COUNTERED request between this buyer and listing, if any. */
+    public static Map<String, Object> getOpenListingRequest(String listingId) {
+        String buyer = requireBuyer();
+        return DatabaseManager.fetchOpenListingRequest(parseListingId(listingId), buyer);
+    }
+
+    /** Seller view of the open request from a specific buyer on a listing. */
+    public static Map<String, Object> getOpenListingRequestForBuyer(String listingId, String buyerUsername) {
+        requireSeller();
+        if (buyerUsername == null || buyerUsername.isBlank()) return null;
+        return DatabaseManager.fetchOpenListingRequest(parseListingId(listingId), buyerUsername.trim());
+    }
+
+    /**
+     * Buyer accepts the seller's counter inside chat: the countered price/days become the deal terms
+     * and the request is accepted.
+     */
+    public static void acceptSellerCounter(int requestId) {
+        String buyer = requireBuyer();
+        DatabaseManager.acceptBuyerCounter(buyer, requestId);
     }
 
     public static List<Map<String, Object>> getRequestMessages(int requestId) {
