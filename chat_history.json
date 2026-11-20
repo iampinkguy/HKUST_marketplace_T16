@@ -56,7 +56,7 @@
           }
         ],
         "seen_buyer": true,
-        "seen_seller": false
+        "seen_seller": true
       }
     }
   },
@@ -139,6 +139,50 @@
         ],
         "seen_buyer": true,
         "seen_seller": true
+      }
+    }
+  },
+  "4": {
+    "conversations": {
+      "alice": {
+        "messages": [
+          {
+            "timestamp": "2026-11-16T14:01:43.740391200",
+            "user": "alice",
+            "role": "buyer",
+            "content": "hello :3"
+          },
+          {
+            "timestamp": "2026-11-16T14:01:48.280130400",
+            "user": "alice",
+            "role": "buyer",
+            "content": "[Formal offer] Proposed price: HK$150"
+          },
+          {
+            "timestamp": "2026-11-16T14:01:53.403169",
+            "user": "alice",
+            "role": "buyer",
+            "content": "[Formal offer] Proposed price: HK$120"
+          }
+        ],
+        "seen_buyer": true,
+        "seen_seller": true
+      }
+    }
+  },
+  "5": {
+    "conversations": {
+      "alice": {
+        "messages": [
+          {
+            "timestamp": "2026-11-16T20:00:28.019198800",
+            "user": "alice",
+            "role": "buyer",
+            "content": "[Formal borrow request] 2026-11-16 to 2026-11-23 (7 days)"
+          }
+        ],
+        "seen_buyer": true,
+        "seen_seller": false
       }
     }
   }
