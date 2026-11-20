@@ -178,13 +178,22 @@ public class BuyerDashboardController {
         VBox root = new VBox(16);
         root.setPadding(new Insets(4));
 
+        HBox searchBar = new HBox(10);
+        searchBar.setAlignment(Pos.CENTER_LEFT);
+        searchBar.setPadding(new Insets(12, 14, 12, 14));
+        searchBar.getStyleClass().add("search-bar");
+        TextField searchField = new TextField(keyword == null ? "" : keyword);
+        searchField.setPromptText("Search marketplace by title, description, category, or seller");
+        searchField.setMaxWidth(Double.MAX_VALUE);
+        HBox.setHgrow(searchField, Priority.ALWAYS);
+        searchField.setId("marketplace-search");
+        Button clearBtn = new Button("Clear");
+        clearBtn.getStyleClass().addAll("btn-outline", "btn-sm");
+        clearBtn.setDisable(keyword == null || keyword.isBlank());
+        searchBar.getChildren().addAll(searchField, clearBtn);
+
         HBox tools = new HBox(10);
         tools.setAlignment(Pos.CENTER_LEFT);
-        TextField searchField = new TextField(keyword);
-        searchField.setPromptText("Search by title or keyword");
-        searchField.setPrefWidth(240);
-        Button searchBtn = new Button("Search");
-        searchBtn.getStyleClass().addAll("btn-primary", "btn-sm");
         Button filterBtn = new Button("Filter");
         filterBtn.getStyleClass().addAll("btn-outline", "btn-sm");
         Button sortBtn = new Button("Sort");
@@ -193,51 +202,71 @@ public class BuyerDashboardController {
         closeBtn.getStyleClass().addAll("btn-outline", "btn-sm");
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
-        tools.getChildren().addAll(searchField, searchBtn, filterBtn, sortBtn, spacer, closeBtn);
+        tools.getChildren().addAll(filterBtn, sortBtn, spacer, closeBtn);
 
         Label summary = new Label(filterSummary());
         summary.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 12px;");
-        searchBtn.setOnAction(event -> {
-            keyword = searchField.getText().trim();
-            showBrowse();
+        VBox resultsBox = new VBox(8);
+        resultsBox.setId("marketplace-results");
+
+        Runnable refreshResults = () -> {
+            keyword = searchField.getText() == null ? "" : searchField.getText().trim();
+            clearBtn.setDisable(keyword.isBlank());
+            summary.setText(filterSummary());
+            resultsBox.getChildren().clear();
+
+            List<Listing> live;
+            try {
+                live = DataService.searchBuyerMarketplace(keyword, category, listingType, condition, minPrice, maxPrice, sort);
+            } catch (IllegalStateException | SecurityException ex) {
+                resultsBox.getChildren().add(errorLabel(ex.getMessage()));
+                return;
+            }
+            Set<Integer> favouriteIds;
+            try {
+                favouriteIds = new HashSet<>(DataService.getBuyerFavouriteIds());
+            } catch (IllegalStateException | SecurityException ex) {
+                favouriteIds = Set.of();
+            }
+            if (live.isEmpty()) {
+                Label empty = new Label(keyword.isBlank()
+                        ? "No live listings match the current filters."
+                        : "No live listings match \"" + keyword + "\".");
+                empty.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 15px;");
+                resultsBox.getChildren().add(empty);
+                return;
+            }
+            FlowPane grid = new FlowPane(16, 16);
+            grid.setPrefWrapLength(900);
+            for (Listing listing : live) {
+                grid.getChildren().add(createListingCard(listing, favouriteIds.contains(Integer.parseInt(listing.getId()))));
+            }
+            resultsBox.getChildren().add(grid);
+        };
+
+        Timeline searchDebounce = new Timeline(new KeyFrame(Duration.millis(120), event -> refreshResults.run()));
+        searchDebounce.setCycleCount(1);
+        searchField.textProperty().addListener((obs, oldText, newText) -> {
+            clearBtn.setDisable(newText == null || newText.isBlank());
+            searchDebounce.stop();
+            searchDebounce.playFromStart();
         });
+        clearBtn.setOnAction(event -> searchField.clear());
         filterBtn.setOnAction(event -> openMarketplaceFilter());
         sortBtn.setOnAction(event -> openMarketplaceSort());
         closeBtn.setOnAction(event -> closeScreen("Marketplace closed."));
 
-        FlowPane grid = new FlowPane(16, 16);
-        grid.setPrefWrapLength(900);
-        List<Listing> live;
-        try {
-            live = DataService.searchBuyerMarketplace(keyword, category, listingType, condition, minPrice, maxPrice, sort);
-        } catch (IllegalStateException | SecurityException ex) {
-            live = List.of();
-            root.getChildren().add(errorLabel(ex.getMessage()));
-        }
-        Set<Integer> favouriteIds;
-        try {
-            favouriteIds = new HashSet<>(DataService.getBuyerFavouriteIds());
-        } catch (IllegalStateException | SecurityException ex) {
-            favouriteIds = Set.of();
-        }
-        if (live.isEmpty()) {
-            Label empty = new Label("No live listings match the current search.");
-            empty.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 15px;");
-            root.getChildren().addAll(tools, summary, empty);
-        } else {
-            for (Listing listing : live) {
-                grid.getChildren().add(createListingCard(listing, favouriteIds.contains(Integer.parseInt(listing.getId()))));
-            }
-            root.getChildren().addAll(tools, summary, grid);
-        }
+        refreshResults.run();
+        root.getChildren().addAll(searchBar, tools, summary, resultsBox);
         return scroll(root);
     }
 
     private String filterSummary() {
         String price = (minPrice == null && maxPrice == null) ? "any price"
                 : (minPrice == null ? "0" : trimPrice(minPrice)) + " – " + (maxPrice == null ? "any" : trimPrice(maxPrice));
-        return "Showing live listings · " + category + " · " + listingType + " · " + condition
-                + " · " + price + " · sorted by " + sort;
+        String search = keyword == null || keyword.isBlank() ? "all keywords" : "\"" + keyword + "\"";
+        return "Showing live listings · search " + search + " · " + category + " · " + listingType
+                + " · " + condition + " · " + price + " · sorted by " + sort;
     }
 
     private void openMarketplaceFilter() {
