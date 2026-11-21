@@ -31,11 +31,29 @@
                 </VBox>
                 <VBox spacing="5">
                     <Label text="Password *" style="-fx-font-weight: 600;"/>
-                    <PasswordField fx:id="passwordField" promptText="Min 8 chars, upper + lower + digit" prefHeight="38"/>
+                    <HBox spacing="8" alignment="CENTER_LEFT">
+                        <StackPane HBox.hgrow="ALWAYS">
+                            <PasswordField fx:id="passwordField" promptText="Min 8 chars, upper + lower + digit"
+                                           prefHeight="38" maxWidth="Infinity"/>
+                            <TextField fx:id="passwordVisibleField" promptText="Min 8 chars, upper + lower + digit"
+                                       prefHeight="38" maxWidth="Infinity" visible="false" managed="false"/>
+                        </StackPane>
+                        <Button fx:id="togglePasswordButton" text="Show" onAction="#togglePassword"
+                                styleClass="btn-outline" prefHeight="38" minWidth="72"/>
+                    </HBox>
                 </VBox>
                 <VBox spacing="5">
                     <Label text="Confirm Password *" style="-fx-font-weight: 600;"/>
-                    <PasswordField fx:id="confirmPasswordField" promptText="Re-enter password" prefHeight="38"/>
+                    <HBox spacing="8" alignment="CENTER_LEFT">
+                        <StackPane HBox.hgrow="ALWAYS">
+                            <PasswordField fx:id="confirmPasswordField" promptText="Re-enter password"
+                                           prefHeight="38" maxWidth="Infinity"/>
+                            <TextField fx:id="confirmPasswordVisibleField" promptText="Re-enter password"
+                                       prefHeight="38" maxWidth="Infinity" visible="false" managed="false"/>
+                        </StackPane>
+                        <Button fx:id="toggleConfirmPasswordButton" text="Show" onAction="#toggleConfirmPassword"
+                                styleClass="btn-outline" prefHeight="38" minWidth="72"/>
+                    </HBox>
                 </VBox>
                 <VBox spacing="5">
                     <Label text="Residence Hall / Off-campus (optional)" style="-fx-font-weight: 600;"/>

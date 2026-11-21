@@ -3,6 +3,7 @@ package com.hkust.marketplace.controllers.admin;
 import com.hkust.marketplace.models.User;
 import com.hkust.marketplace.models.UserRole;
 import com.hkust.marketplace.utils.DataService;
+import com.hkust.marketplace.utils.DatabaseManager;
 import com.hkust.marketplace.utils.SceneManager;
 import com.hkust.marketplace.utils.SessionManager;
 import javafx.fxml.FXML;
@@ -49,9 +50,20 @@ public class AdminLoginController {
         errorLabel.setManaged(false);
 
         if (username.isEmpty() || password.isEmpty()) {
-            showError("Please enter credentials.");
+            showError("Please enter both username and password.");
             return;
         }
+
+        var account = DatabaseManager.fetchRow("users", "username", username);
+        if (account != null && !"ADMIN".equals(account.get("role"))) {
+            showError("This account is not an admin account. Please use the correct portal.");
+            return;
+        }
+        if (account != null && ((Number) account.get("active")).intValue() == 0) {
+            showError("This account has been deactivated. Contact admin.");
+            return;
+        }
+
         User user;
         try {
             user = DataService.authenticate(username, password, UserRole.ADMIN);
@@ -60,7 +72,7 @@ public class AdminLoginController {
             return;
         }
         if (user == null) {
-            showError("Invalid admin credentials.");
+            showError("The credentials are invalid.");
             return;
         }
         passwordField.clear();

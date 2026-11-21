@@ -13,7 +13,11 @@ public class SellerRegisterController {
     @FXML private TextField usernameField;
     @FXML private TextField fullNameField;
     @FXML private PasswordField passwordField;
+    @FXML private TextField passwordVisibleField;
+    @FXML private Button togglePasswordButton;
     @FXML private PasswordField confirmPasswordField;
+    @FXML private TextField confirmPasswordVisibleField;
+    @FXML private Button toggleConfirmPasswordButton;
     @FXML private ComboBox<String> meetupCombo;
     @FXML private TextArea bioArea;
     @FXML private Label errorLabel;
@@ -23,6 +27,34 @@ public class SellerRegisterController {
     public void initialize() {
         DatabaseManager.initialize();
         meetupCombo.setItems(FXCollections.observableArrayList(DataService.HKUST_LOCATIONS));
+        passwordVisibleField.textProperty().bindBidirectional(passwordField.textProperty());
+        confirmPasswordVisibleField.textProperty().bindBidirectional(confirmPasswordField.textProperty());
+    }
+
+    @FXML
+    private void togglePassword() {
+        toggleVisibility(passwordField, passwordVisibleField, togglePasswordButton);
+    }
+
+    @FXML
+    private void toggleConfirmPassword() {
+        toggleVisibility(confirmPasswordField, confirmPasswordVisibleField, toggleConfirmPasswordButton);
+    }
+
+    private void toggleVisibility(PasswordField hidden, TextField visible, Button toggle) {
+        boolean show = !visible.isVisible();
+        visible.setVisible(show);
+        visible.setManaged(show);
+        hidden.setVisible(!show);
+        hidden.setManaged(!show);
+        toggle.setText(show ? "Hide" : "Show");
+        if (show) {
+            visible.requestFocus();
+            visible.positionCaret(visible.getText().length());
+        } else {
+            hidden.requestFocus();
+            hidden.positionCaret(hidden.getText().length());
+        }
     }
 
     @FXML

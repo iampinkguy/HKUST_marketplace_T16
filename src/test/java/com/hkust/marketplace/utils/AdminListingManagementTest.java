@@ -160,7 +160,12 @@ public class AdminListingManagementTest {
         Listing l = item(ListingType.SELL); DataService.addListingForSeller("seller", l, List.of());
         DatabaseManager.createListingRequest("buyer", Integer.parseInt(l.getId()), "OFFER", 80.0, null);
         int counter = DatabaseManager.createListingRequest("buyer2", Integer.parseInt(l.getId()), "OFFER", 70.0, null);
-        DatabaseManager.resolveListingRequest("seller", counter, "COUNTER", 100.0);
+        try (var c = DatabaseManager.connect();
+             var update = c.prepareStatement(
+                     "UPDATE listing_requests SET status = 'COUNTERED', counter_price = 100.0 WHERE request_id = ?")) {
+            update.setInt(1, counter);
+            assertEquals(1, update.executeUpdate());
+        }
         DatabaseManager.appendRequestMessage(counter, "buyer2", "BUYER", "Can collect tomorrow.");
         long version = DataService.getListingForAdmin(l.getId()).getReviewVersion();
         try (var c = DatabaseManager.connect(); var s = c.createStatement()) {

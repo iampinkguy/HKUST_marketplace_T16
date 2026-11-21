@@ -3,6 +3,7 @@ package com.hkust.marketplace.controllers.seller;
 import com.hkust.marketplace.models.User;
 import com.hkust.marketplace.models.UserRole;
 import com.hkust.marketplace.utils.DataService;
+import com.hkust.marketplace.utils.DatabaseManager;
 import com.hkust.marketplace.utils.SceneManager;
 import com.hkust.marketplace.utils.SessionManager;
 import javafx.fxml.FXML;
@@ -52,6 +53,17 @@ public class SellerLoginController {
             showError("Please enter both username and password.");
             return;
         }
+
+        var account = DatabaseManager.fetchRow("users", "username", username);
+        if (account != null && !"SELLER".equals(account.get("role"))) {
+            showError("This account is not a seller account. Please use the correct portal.");
+            return;
+        }
+        if (account != null && ((Number) account.get("active")).intValue() == 0) {
+            showError("This account has been deactivated. Contact admin.");
+            return;
+        }
+
         User user;
         try {
             user = DataService.authenticate(username, password, UserRole.SELLER);
@@ -60,7 +72,7 @@ public class SellerLoginController {
             return;
         }
         if (user == null) {
-            showError("Invalid seller credentials.");
+            showError("The credentials are invalid.");
             return;
         }
 

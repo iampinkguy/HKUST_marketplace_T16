@@ -90,12 +90,22 @@ public final class DialogStyle {
     }
 
     private static void styleButtons(DialogPane pane) {
+        boolean closeOnly = pane.getButtonTypes().size() == 1
+                && pane.getButtonTypes().get(0) == ButtonType.CLOSE;
         for (ButtonType type : pane.getButtonTypes()) {
             Node node = pane.lookupButton(type);
             if (!(node instanceof Button button)) continue;
             button.getStyleClass().removeAll("btn-primary", "btn-outline", "btn-danger", "btn-gold", "btn-success");
             ButtonBar.ButtonData data = type.getButtonData();
-            String text = type.getText() == null ? "" : type.getText();
+            String text = button.getText() == null
+                    ? (type.getText() == null ? "" : type.getText())
+                    : button.getText();
+            // Window chrome already has a close control — hide the duplicate dialog-bar X/Close.
+            if (closeOnly || "X".equalsIgnoreCase(text.trim())) {
+                button.setVisible(false);
+                button.setManaged(false);
+                continue;
+            }
             if ("Reject".equalsIgnoreCase(text)
                     || "Delete".equalsIgnoreCase(text)
                     || "Take Down".equalsIgnoreCase(text)) {
@@ -112,6 +122,13 @@ public final class DialogStyle {
                 button.getStyleClass().add("btn-outline");
             } else {
                 button.getStyleClass().add("btn-outline");
+            }
+        }
+        if (closeOnly) {
+            Node buttonBar = pane.lookup(".button-bar");
+            if (buttonBar != null) {
+                buttonBar.setVisible(false);
+                buttonBar.setManaged(false);
             }
         }
     }

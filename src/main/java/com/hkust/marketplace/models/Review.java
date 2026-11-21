@@ -33,9 +33,10 @@ public class Review {
     public String getListingTitle() { return listingTitle; }
     public void setListingTitle(String listingTitle) { this.listingTitle = listingTitle; }
 
-    /** Whole-star view retained for existing seller screens. */
+    /** Rounded whole stars — prefer {@link #getScore()} for half-star display. */
     public int getRating() { return (int) Math.round(rating); }
     public void setRating(int rating) { this.rating = rating; }
+    /** Exact score including halves (e.g. 3.5). */
     public double getScore() { return rating; }
     public void setScore(double rating) { this.rating = rating; }
 

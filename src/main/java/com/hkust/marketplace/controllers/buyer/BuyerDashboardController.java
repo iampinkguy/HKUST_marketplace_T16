@@ -74,6 +74,7 @@ public class BuyerDashboardController {
     private String dealType = "All Types";
     private String dealSeller = "";
     private String dealSort = "Newest";
+    private final Map<String, String> sellerRatingCache = new java.util.HashMap<>();
 
     private LocalDate historyFrom;
     private LocalDate historyTo;
@@ -171,6 +172,7 @@ public class BuyerDashboardController {
     private void showBrowse() {
         setActive(btnBrowse, "Browse Marketplace");
         currentPage = Page.BROWSE;
+        sellerRatingCache.clear();
         contentPane.getChildren().setAll(marketplaceView());
     }
 
@@ -358,7 +360,7 @@ public class BuyerDashboardController {
         card.getChildren().addAll(thumb, top,
                 styled(listing.getTitle(), "-fx-font-weight: bold; -fx-font-size: 15px; -fx-text-fill: #1a1a2e;"),
                 styled(listing.getCategory() + " · " + listing.getCondition(), muted()),
-                styled("Seller: " + text(listing.getSellerFullName()), muted()),
+                styled("Seller: " + text(listing.getSellerFullName()) + " · " + sellerRatingSummary(listing.getSellerUsername()), muted()),
                 styled("Meet-up: " + text(listing.getMeetupLocation()), muted()),
                 styled("Posted: " + formatDate(listing.getPostedAt()), faint()),
                 styled("Status: " + text(listing.getAvailabilityStatus()), muted()));
@@ -464,9 +466,12 @@ public class BuyerDashboardController {
         List<Map<String, Object>> sellerReviews = DataService.getSellerReviews(listing.getSellerUsername());
         if (sellerReviews.isEmpty()) reviews.getChildren().add(styled("No reviews yet.", muted()));
         for (Map<String, Object> review : sellerReviews) {
+            double score = review.get("rating") instanceof Number number ? number.doubleValue() : 0;
             String reply = review.get("seller_reply") == null ? "" : "\nSeller reply: " + review.get("seller_reply");
-            reviews.getChildren().add(styled(review.get("rating") + " / 5 · " + textValue(review.get("item_name"))
-                    + "\n" + textValue(review.get("text")) + reply, muted()));
+            VBox reviewBlock = new VBox(2,
+                    com.hkust.marketplace.utils.StarRating.graphic(score),
+                    styled(textValue(review.get("item_name")) + "\n" + textValue(review.get("text")) + reply, muted()));
+            reviews.getChildren().add(reviewBlock);
         }
 
         boolean finishedView = mode == DetailMode.FINISHED || mode == DetailMode.HISTORY
@@ -499,10 +504,9 @@ public class BuyerDashboardController {
         Button chat = new Button("Chat");
         chat.getStyleClass().add("btn-primary");
         chat.setOnAction(event -> showChatbox(listing, !finishedView && available));
-        if (!finishedView) actionButtons.add(chat);
         actions.getChildren().add(chat);
         if (!available && !ownsDeal) {
-            notice.setText("This listing is no longer available. Only closing this screen is enabled.");
+            notice.setText("This listing is no longer available. Chat history is kept — open Chat to view the announcement.");
             actionButtons.forEach(button -> button.setDisable(true));
         }
 
@@ -521,8 +525,8 @@ public class BuyerDashboardController {
                         && "Available".equals(latest.getAvailabilityStatus());
                 if (latest == null || (!available && !ownsDeal)) {
                     notice.setText(latest == null
-                            ? "This listing was removed. Only closing this screen is enabled."
-                            : "This listing was accepted for another buyer or is no longer available.");
+                            ? "This listing was removed. Chat history is kept if you already started a conversation."
+                            : "This listing was accepted for another buyer or is no longer available. Open Chat to view the announcement.");
                     actionButtons.forEach(button -> button.setDisable(true));
                 }
                 if (latest != null && latest.getReviewVersion() != announcedVersion) {
@@ -724,7 +728,10 @@ public class BuyerDashboardController {
         dialog.setTitle("Chat");
         dialog.setHeaderText("Chat with " + listing.getSellerFullName() + " about " + listing.getTitle());
         dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
-        ((Button) dialog.getDialogPane().lookupButton(ButtonType.CLOSE)).setText("X");
+
+        boolean listingAvailable = "LIVE".equals(listing.getStatus().name())
+                && "Available".equals(listing.getAvailabilityStatus());
+        boolean canMessage = allowFormalAction || listingAvailable || buyerOwnsActiveDeal(listing.getId());
 
         ListView<Message> messageList = new ListView<>();
         messageList.setPrefHeight(280);
@@ -734,24 +741,33 @@ public class BuyerDashboardController {
                 super.updateItem(message, empty);
                 if (empty || message == null) {
                     setText(null);
+                    setStyle("");
                 } else {
                     String timestamp = message.getTimestamp() == null ? ""
                             : message.getTimestamp().format(DateTimeFormatter.ofPattern("dd MMM HH:mm:ss", Locale.ENGLISH));
-                    setText(message.getSender_id() + " (" + timestamp + ")\n" + message.getContent());
+                    boolean system = "system".equalsIgnoreCase(message.getSender_role());
+                    String who = system ? "Announcement" : message.getSender_id();
+                    setText(who + " (" + timestamp + ")\n" + message.getContent());
                     setWrapText(true);
+                    setStyle(system ? "-fx-text-fill: #8a5a00; -fx-font-style: italic;" : "");
                 }
             }
         });
         TextField search = new TextField();
         search.setPromptText("Search this chat history");
         TextArea input = new TextArea();
-        input.setPromptText("Type a message...");
+        input.setPromptText(canMessage ? "Type a message..." : "Messaging is closed — listing is no longer available.");
         input.setPrefRowCount(3);
+        input.setDisable(!canMessage);
         Button send = new Button("Send");
         send.getStyleClass().add("btn-primary");
+        send.setDisable(!canMessage);
         Label offerStatus = new Label();
         offerStatus.setWrapText(true);
         offerStatus.setStyle("-fx-text-fill: #8a5a00;");
+        if (!canMessage) {
+            offerStatus.setText("This listing is no longer available. Previous chat messages are kept below.");
+        }
         HBox offerActions = new HBox(8);
 
         Runnable[] refreshOfferActions = new Runnable[1];
@@ -776,45 +792,19 @@ public class BuyerDashboardController {
         };
         refreshOfferActions[0] = () -> {
             offerActions.getChildren().clear();
+            if (!canMessage) {
+                offerStatus.setText("This listing is no longer available. Previous chat messages are kept below.");
+                return;
+            }
             offerStatus.setText("");
             if (!allowFormalAction) return;
             try {
                 Map<String, Object> open = DataService.getOpenListingRequest(listing.getId());
                 String status = open == null ? null : String.valueOf(open.get("status"));
-                if ("COUNTERED".equals(status)) {
-                    String detail = open.get("counter_price") != null
-                            ? "Seller countered at HK$" + trimNumber(open.get("counter_price"))
-                            : "Seller countered with " + open.get("proposed_days") + " day(s)";
-                    offerStatus.setText(detail + ". Accept their counter or send your own counter in chat.");
-                    Button acceptCounter = new Button("Accept Counter");
-                    acceptCounter.getStyleClass().add("btn-gold");
-                    acceptCounter.setOnAction(event -> {
-                        try {
-                            int requestId = ((Number) open.get("request_id")).intValue();
-                            DataService.acceptSellerCounter(requestId);
-                            String note = open.get("counter_price") != null
-                                    ? "[Formal] Accepted seller counter at HK$" + trimNumber(open.get("counter_price"))
-                                    : "[Formal] Accepted seller counter (" + open.get("proposed_days") + " day(s))";
-                            DataService.sendBuyerListingChatMessage(listing.getId(), note);
-                            alert(Alert.AlertType.INFORMATION, "You accepted the seller's counter. The deal is confirmed.");
-                            refreshMessages.run();
-                        } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
-                            alert(Alert.AlertType.ERROR, ex.getMessage());
-                        }
-                    });
-                    Button counterBack = new Button(listing.getType() == ListingType.LEND
-                            ? "Counter Borrow" : "Counter Offer");
-                    counterBack.getStyleClass().add("btn-outline");
-                    counterBack.setOnAction(event -> {
-                        Runnable after = refreshMessages::run;
-                        if (listing.getType() == ListingType.LEND) borrowPeriod(listing, after);
-                        else offerPrice(listing, after);
-                    });
-                    offerActions.getChildren().addAll(acceptCounter, counterBack);
-                    return;
-                }
-                if ("PENDING".equals(status)) {
-                    offerStatus.setText("Your offer is pending. Waiting for the seller to Accept / Decline / Counter in chat.");
+                if ("PENDING".equals(status) || "COUNTERED".equals(status)) {
+                    offerStatus.setText("Your formal offer is pending. Negotiate in chat if needed, then Update Offer — only you submit the price. The seller can Accept or Decline.");
+                } else if (open == null && (listing.getType() == ListingType.SELL || listing.getType() == ListingType.LEND)) {
+                    offerStatus.setText("Submit a formal offer when ready. You can negotiate freely in chat first.");
                 }
                 Button formal = new Button(switch (listing.getType()) {
                     case SELL -> open == null ? "Make Offer" : "Update Offer";
@@ -866,14 +856,9 @@ public class BuyerDashboardController {
         filterBtn.getStyleClass().addAll("btn-outline", "btn-sm");
         Button sortBtn = new Button("Sort");
         sortBtn.getStyleClass().addAll("btn-outline", "btn-sm");
-        Button close = new Button("X");
-        close.getStyleClass().addAll("btn-outline", "btn-sm");
-        Region spacer = new Region();
-        HBox.setHgrow(spacer, Priority.ALWAYS);
         filterBtn.setOnAction(event -> openDealFilter());
         sortBtn.setOnAction(event -> openDealSort());
-        close.setOnAction(event -> closeScreen("Deals screen closed."));
-        tools.getChildren().addAll(filterBtn, sortBtn, styled(dealSummary(), muted()), spacer, close);
+        tools.getChildren().addAll(filterBtn, sortBtn, styled(dealSummary(), muted()));
 
         List<Map<String, Object>> deals;
         Map<String, Review> reviewsByListing = new java.util.HashMap<>();
@@ -927,13 +912,13 @@ public class BuyerDashboardController {
         } else if (deal.get("seller_completed_at") != null && deal.get("buyer_completed_at") == null) {
             status = "Waiting for you to mark complete";
         }
-        if (deal.get("counter_price") != null) status += " · Counter HK$" + trimNumber(deal.get("counter_price"));
         card.getChildren().addAll(
                 styled(textValue(deal.get("item_name")), "-fx-font-weight: bold; -fx-font-size: 15px;"),
                 styled("Seller: " + textValue(deal.get("seller_name")) + " · " + details, muted()),
                 styled("Status: " + status + (deal.get("due_at") == null ? "" : " · Due " + dateOnly(deal.get("due_at"))), muted())
         );
         HBox actions = new HBox(8);
+        actions.setAlignment(Pos.CENTER_LEFT);
         if (deal.get("listing_id") != null) {
             Button open = new Button("View listing");
             open.getStyleClass().addAll("btn-outline", "btn-sm");
@@ -964,7 +949,7 @@ public class BuyerDashboardController {
         if (("OFFER".equals(type) || "CLAIM".equals(type)) && "ACCEPTED".equals(deal.get("status"))
                 && deal.get("completed_at") == null && deal.get("buyer_completed_at") == null) {
             Button complete = new Button("Mark complete");
-            complete.getStyleClass().add("btn-primary");
+            complete.getStyleClass().addAll("btn-primary", "btn-sm");
             complete.setOnAction(event -> {
                 try {
                     boolean fullyDone = DataService.completeBuyerDeal(requestId);
@@ -986,13 +971,14 @@ public class BuyerDashboardController {
         if (!isOngoing(deal) && !"DECLINED".equals(deal.get("status")) && !isRated(deal)
                 && (deal.get("completed_at") != null || deal.get("returned_at") != null)) {
             Button rate = new Button("Rate seller");
-            rate.getStyleClass().add("btn-gold");
+            rate.getStyleClass().addAll("btn-gold", "btn-sm");
             rate.setOnAction(event -> {
                 askForRating(requestId, textValue(deal.get("item_name")));
                 showMyDeals();
             });
             actions.getChildren().add(rate);
         }
+        equalizeActionButtons(actions);
         card.getChildren().add(actions);
         if (isRated(deal) && deal.get("listing_id") != null) {
             Review review = reviewsByListing.get(String.valueOf(deal.get("listing_id")));
@@ -1276,6 +1262,7 @@ public class BuyerDashboardController {
             alert(Alert.AlertType.ERROR, ex.getMessage());
             favourites = List.of();
         }
+        sellerRatingCache.clear();
         if (favourites.isEmpty()) root.getChildren().add(new Label("No favourite listings yet."));
         else {
             for (Listing listing : favourites) grid.getChildren().add(createListingCard(listing, true));
@@ -1361,13 +1348,26 @@ public class BuyerDashboardController {
         String title = notification.getTitle() == null ? "" : notification.getTitle().toLowerCase(Locale.ROOT);
         String category = notification.getCategory() == null ? "" : notification.getCategory().toLowerCase(Locale.ROOT);
 
-        if (listingId != null) {
+        String resolvedListingId = listingId;
+        if (resolvedListingId == null && notification.getListingId() != null) {
+            resolvedListingId = notification.getListingId().toString();
+        }
+
+        // Unavailable-listing notices always open that listing's detail page (not My Deals / chat).
+        if (title.contains("no longer available") || title.contains("listing unavailable")) {
+            if (openUnavailableListingFromNotice(resolvedListingId, deal)) return;
+            alert(Alert.AlertType.INFORMATION,
+                    "This listing is no longer available and could not be opened from the notification.");
+            return;
+        }
+
+        if (resolvedListingId != null) {
             try {
-                Listing listing = DataService.peekBuyerListing(listingId);
+                Listing listing = DataService.peekBuyerListing(resolvedListingId);
                 if (listing != null) {
                     DetailMode mode = deal == null ? DetailMode.NOTICE
                             : DataService.isBuyerDealFinished(deal) ? DetailMode.NOTICE_FINISHED : DetailMode.NOTICE;
-                    showListingDetail(listingId, mode);
+                    showListingDetail(resolvedListingId, mode);
                     return;
                 }
             } catch (IllegalStateException | SecurityException | IllegalArgumentException ignored) {
@@ -1414,7 +1414,6 @@ public class BuyerDashboardController {
         body.setPrefWidth(480);
         details.getDialogPane().setContent(body);
         details.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
-        ((Button) details.getDialogPane().lookupButton(ButtonType.CLOSE)).setText("X");
         DialogStyle.showAndWait(details);
         showNotifications();
     }
@@ -1469,7 +1468,6 @@ public class BuyerDashboardController {
     private boolean statusMatchesNotification(Notification notification, Map<String, Object> deal) {
         String title = notification.getTitle() == null ? "" : notification.getTitle().toLowerCase(Locale.ROOT);
         String status = String.valueOf(deal.get("status"));
-        if (title.contains("counter")) return "COUNTERED".equals(status);
         if (title.contains("declin") || title.contains("no longer available")) return "DECLINED".equals(status);
         if (title.contains("accepted")) return "ACCEPTED".equals(status);
         if (title.contains("ended") || title.contains("returned")) return deal.get("returned_at") != null;
@@ -1478,13 +1476,22 @@ public class BuyerDashboardController {
     }
 
     private String listingIdForNotification(Notification notification, Map<String, Object> deal) {
-        if (deal != null && deal.get("listing_id") != null) return String.valueOf(deal.get("listing_id"));
         if (notification.getListingId() != null) return notification.getListingId().toString();
+        if (deal != null && deal.get("listing_id") != null) return String.valueOf(deal.get("listing_id"));
         String message = notification.getMessage() == null ? "" : notification.getMessage();
         if (message.isBlank()) return null;
         try {
             String bestId = null;
             int bestLength = 0;
+            // Prefer the buyer's own deals so unavailable / declined listings still resolve.
+            for (Map<String, Object> buyerDeal : DataService.getBuyerDeals()) {
+                String name = textValue(buyerDeal.get("item_name"));
+                if (name.isBlank() || !message.contains(name) || name.length() <= bestLength) continue;
+                if (buyerDeal.get("listing_id") == null) continue;
+                bestId = String.valueOf(buyerDeal.get("listing_id"));
+                bestLength = name.length();
+            }
+            if (bestId != null) return bestId;
             for (Listing listing : DataService.searchBuyerMarketplace(
                     "", "All Categories", "All Types", "All Conditions", null, null, "Newest")) {
                 String name = listing.getTitle();
@@ -1495,6 +1502,23 @@ public class BuyerDashboardController {
             return bestId;
         } catch (IllegalStateException | SecurityException | IllegalArgumentException ex) {
             return null;
+        }
+    }
+
+    private boolean openUnavailableListingFromNotice(String listingId, Map<String, Object> deal) {
+        String id = listingId;
+        if (id == null && deal != null && deal.get("listing_id") != null) {
+            id = String.valueOf(deal.get("listing_id"));
+        }
+        if (id == null) return false;
+        try {
+            Listing listing = DataService.peekBuyerListing(id);
+            if (listing == null) return false;
+            announcedVersion = listing.getReviewVersion();
+            renderListingDetail(listing, DetailMode.NOTICE);
+            return true;
+        } catch (IllegalStateException | SecurityException | IllegalArgumentException ex) {
+            return false;
         }
     }
 
@@ -1631,6 +1655,16 @@ public class BuyerDashboardController {
         return label;
     }
 
+    private void equalizeActionButtons(HBox actions) {
+        for (javafx.scene.Node node : actions.getChildren()) {
+            if (!(node instanceof Button button)) continue;
+            button.setMaxWidth(Double.MAX_VALUE);
+            button.setMinHeight(32);
+            button.setPrefHeight(32);
+            HBox.setHgrow(button, Priority.ALWAYS);
+        }
+    }
+
     private Label errorLabel(String message) {
         return styled(message, "-fx-text-fill: #c62828;");
     }
@@ -1686,6 +1720,21 @@ public class BuyerDashboardController {
     }
 
     private String text(String value) { return value == null || value.isBlank() ? "—" : value; }
+
+    private String sellerRatingSummary(String sellerUsername) {
+        if (sellerUsername == null || sellerUsername.isBlank()) return "no ratings yet";
+        return sellerRatingCache.computeIfAbsent(sellerUsername, username -> {
+            try {
+                Map<String, Object> seller = DataService.getSellerRating(username);
+                double average = seller.get("average_rating") instanceof Number number ? number.doubleValue() : 0;
+                int count = seller.get("rating_count") instanceof Number number ? number.intValue() : 0;
+                if (count <= 0) return "no ratings yet";
+                return String.format(Locale.ROOT, "%.1f / 5 (%d)", average, count);
+            } catch (IllegalStateException | SecurityException ex) {
+                return "rating unavailable";
+            }
+        });
+    }
     private String textValue(Object value) { return value == null ? "" : value.toString(); }
 
     @FXML
