@@ -423,11 +423,8 @@ public class DataService {
                                             Integer counterDays) {
         String seller = requireSeller();
         if ("COUNTER".equalsIgnoreCase(action)) {
-            boolean priced = counterPrice != null && Double.isFinite(counterPrice) && counterPrice > 0;
-            boolean timed = counterDays != null && counterDays > 0;
-            if (!priced && !timed) {
-                throw new IllegalArgumentException("Enter a valid positive counteroffer.");
-            }
+            throw new IllegalArgumentException(
+                    "Sellers cannot submit a formal counter. Negotiate in chat; only the buyer can offer a price.");
         }
         DatabaseManager.resolveListingRequest(seller, requestId, action, counterPrice, counterDays);
     }
@@ -446,12 +443,12 @@ public class DataService {
     }
 
     /**
-     * Buyer accepts the seller's counter inside chat: the countered price/days become the deal terms
-     * and the request is accepted.
+     * @deprecated Formal seller counters were removed. Buyers update their own offer; sellers Accept/Decline.
      */
+    @Deprecated
     public static void acceptSellerCounter(int requestId) {
-        String buyer = requireBuyer();
-        DatabaseManager.acceptBuyerCounter(buyer, requestId);
+        throw new IllegalStateException(
+                "Seller counters are no longer used. Update your offer in chat; the seller can Accept or Decline.");
     }
 
     public static List<Map<String, Object>> getRequestMessages(int requestId) {

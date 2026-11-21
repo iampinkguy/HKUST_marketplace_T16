@@ -11,17 +11,48 @@ public class BuyerRegisterController {
     @FXML private TextField usernameField;
     @FXML private TextField fullNameField;
     @FXML private PasswordField passwordField;
+    @FXML private TextField passwordVisibleField;
+    @FXML private Button togglePasswordButton;
     @FXML private PasswordField confirmPasswordField;
+    @FXML private TextField confirmPasswordVisibleField;
+    @FXML private Button toggleConfirmPasswordButton;
     @FXML private ComboBox<String> residenceCombo;
     @FXML private Label errorLabel;
     @FXML private Label successLabel;
-
 
     @FXML
     public void initialize() {
         residenceCombo.setItems(FXCollections.observableArrayList(
             com.hkust.marketplace.utils.DataService.RESIDENCES
         ));
+        passwordVisibleField.textProperty().bindBidirectional(passwordField.textProperty());
+        confirmPasswordVisibleField.textProperty().bindBidirectional(confirmPasswordField.textProperty());
+    }
+
+    @FXML
+    private void togglePassword() {
+        toggleVisibility(passwordField, passwordVisibleField, togglePasswordButton);
+    }
+
+    @FXML
+    private void toggleConfirmPassword() {
+        toggleVisibility(confirmPasswordField, confirmPasswordVisibleField, toggleConfirmPasswordButton);
+    }
+
+    private void toggleVisibility(PasswordField hidden, TextField visible, Button toggle) {
+        boolean show = !visible.isVisible();
+        visible.setVisible(show);
+        visible.setManaged(show);
+        hidden.setVisible(!show);
+        hidden.setManaged(!show);
+        toggle.setText(show ? "Hide" : "Show");
+        if (show) {
+            visible.requestFocus();
+            visible.positionCaret(visible.getText().length());
+        } else {
+            hidden.requestFocus();
+            hidden.positionCaret(hidden.getText().length());
+        }
     }
 
     @FXML

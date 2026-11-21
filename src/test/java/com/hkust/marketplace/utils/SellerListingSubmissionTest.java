@@ -268,7 +268,7 @@ public class SellerListingSubmissionTest {
     }
 
     @Test
-    public void counterofferAndPrivateRequestMessagesArePersisted() {
+    public void buyerUpdatesOfferAfterChatNegotiationAndSellerCannotCounterFormally() {
         DatabaseManager.createUser("buyer", "Test Buyer", "unused", UserRole.BUYER.name(), null, null, null);
         Listing listing = listing(ListingType.SELL);
         listing.setPrice(50.0);
@@ -280,13 +280,16 @@ public class SellerListingSubmissionTest {
         DataService.sendRequestMessage(requestId, "Would you consider a different price?");
         SessionManager.login(new User("seller", "Test Seller", "unused", UserRole.SELLER));
         assertEquals(1, DataService.getRequestMessages(requestId).size());
-        DataService.resolveSellerRequest(requestId, "COUNTER", 47.0);
-        assertTrue(DataService.getPendingSellerRequests().isEmpty());
+        assertThrows(IllegalArgumentException.class,
+                () -> DataService.resolveSellerRequest(requestId, "COUNTER", 47.0));
+        DataService.sendRequestMessage(requestId, "How about HK$47?");
 
         SessionManager.login(new User("buyer", "Test Buyer", "unused", UserRole.BUYER));
+        int updatedId = DataService.submitBuyerRequest(listing.getId(), "OFFER", 47.0, null);
         Map<String, Object> request = DataService.getBuyerRequests().get(0);
-        assertEquals("COUNTERED", request.get("status"));
-        assertEquals(47.0, ((Number) request.get("counter_price")).doubleValue(), 0.001);
+        assertEquals(updatedId, ((Number) request.get("request_id")).intValue());
+        assertEquals("PENDING", request.get("status"));
+        assertEquals(47.0, ((Number) request.get("offer_price")).doubleValue(), 0.001);
     }
 
     @Test

@@ -6,6 +6,7 @@ import com.hkust.marketplace.utils.DatabaseManager;
 import com.hkust.marketplace.utils.DialogStyle;
 import com.hkust.marketplace.utils.SceneManager;
 import com.hkust.marketplace.utils.SessionManager;
+import com.hkust.marketplace.utils.StarRating;
 import javafx.animation.KeyFrame;
 import javafx.animation.Timeline;
 import javafx.collections.FXCollections;
@@ -49,6 +50,11 @@ public class SellerDashboardController {
     private Button currentActiveBtn;
     private String notificationCategory = "All";
     private Timeline notificationTicker;
+
+    private String listingKeyword = "";
+    private String listingCategory = "All Categories";
+    private String listingType = "All Types";
+    private String listingStatus = "All Statuses";
 
     @FXML
     public void initialize() {
@@ -108,16 +114,38 @@ public class SellerDashboardController {
         VBox root = new VBox(14);
         root.setPadding(new Insets(4));
 
+        HBox tools = new HBox(8);
+        tools.setAlignment(Pos.CENTER_LEFT);
+        Button filterBtn = new Button("Filter");
+        filterBtn.getStyleClass().addAll("btn-outline", "btn-sm");
+        filterBtn.setOnAction(event -> openListingFilter());
+        Button clearBtn = new Button("Clear");
+        clearBtn.getStyleClass().addAll("btn-outline", "btn-sm");
+        clearBtn.setDisable(!hasListingFilters());
+        clearBtn.setOnAction(event -> {
+            listingKeyword = "";
+            listingCategory = "All Categories";
+            listingType = "All Types";
+            listingStatus = "All Statuses";
+            showMyListings();
+        });
+        Label summary = new Label(listingFilterSummary());
+        summary.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 12px;");
+        tools.getChildren().addAll(filterBtn, clearBtn, summary);
+        root.getChildren().add(tools);
+
         List<Listing> myListings;
         try {
-            myListings = DataService.getSellerListings();
+            myListings = filteredSellerListings(DataService.getSellerListings());
         } catch (IllegalStateException | SecurityException e) {
             showProfileError("Could not load your listings: " + e.getMessage());
             return;
         }
 
         if (myListings.isEmpty()) {
-            Label empty = new Label("You have not posted any listings yet.");
+            Label empty = new Label(hasListingFilters()
+                    ? "No listings match the current filters."
+                    : "You have not posted any listings yet.");
             empty.setStyle("-fx-text-fill: #5a5a7a;");
             root.getChildren().add(empty);
         } else {
@@ -130,16 +158,108 @@ public class SellerDashboardController {
         contentPane.getChildren().add(scroll);
     }
 
+    private void openListingFilter() {
+        Dialog<ButtonType> dialog = new Dialog<>();
+        dialog.setTitle("Filter listings");
+        dialog.setHeaderText("Narrow down your listings");
+        dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
+        ((Button) dialog.getDialogPane().lookupButton(ButtonType.OK)).setText("Apply");
+
+        TextField keywordField = new TextField(listingKeyword);
+        keywordField.setPromptText("Title keyword");
+        ComboBox<String> categories = new ComboBox<>();
+        categories.getItems().add("All Categories");
+        categories.getItems().addAll(DataService.CATEGORIES);
+        categories.setValue(categories.getItems().contains(listingCategory) ? listingCategory : "All Categories");
+        categories.setMaxWidth(Double.MAX_VALUE);
+
+        ComboBox<String> types = new ComboBox<>(FXCollections.observableArrayList(
+                "All Types", "For Sale", "For Lending", "Giveaway"));
+        types.setValue(types.getItems().contains(listingType) ? listingType : "All Types");
+        types.setMaxWidth(Double.MAX_VALUE);
+
+        ComboBox<String> statuses = new ComboBox<>(FXCollections.observableArrayList(
+                "All Statuses",
+                "Active (Live / Pending / Reserved / Rejected)",
+                "Finished (Sold / Lent / Given / Removed)",
+                "Pending Review", "Live", "Rejected", "Reserved",
+                "Sold", "Lent", "Given", "Removed"));
+        statuses.setValue(statuses.getItems().contains(listingStatus) ? listingStatus : "All Statuses");
+        statuses.setMaxWidth(Double.MAX_VALUE);
+
+        dialog.getDialogPane().setContent(new VBox(8,
+                new Label("Keyword"), keywordField,
+                new Label("Category"), categories,
+                new Label("Listing type"), types,
+                new Label("Status"), statuses));
+        DialogStyle.showAndWait(dialog).ifPresent(response -> {
+            if (response != ButtonType.OK) return;
+            listingKeyword = keywordField.getText() == null ? "" : keywordField.getText().trim();
+            listingCategory = categories.getValue();
+            listingType = types.getValue();
+            listingStatus = statuses.getValue();
+            showMyListings();
+        });
+    }
+
+    private List<Listing> filteredSellerListings(List<Listing> listings) {
+        String needle = listingKeyword.toLowerCase(Locale.ROOT);
+        List<Listing> filtered = new ArrayList<>();
+        for (Listing listing : listings) {
+            if (!"All Categories".equals(listingCategory) && !listingCategory.equals(listing.getCategory())) {
+                continue;
+            }
+            if (!"All Types".equals(listingType) && !listingType.equals(listing.getTypeDisplay())) {
+                continue;
+            }
+            if (!matchesListingStatus(listing.getStatus(), listingStatus)) continue;
+            if (!needle.isEmpty()) {
+                String title = listing.getTitle() == null ? "" : listing.getTitle().toLowerCase(Locale.ROOT);
+                String id = listing.getId() == null ? "" : listing.getId().toLowerCase(Locale.ROOT);
+                if (!title.contains(needle) && !id.contains(needle)) continue;
+            }
+            filtered.add(listing);
+        }
+        return filtered;
+    }
+
+    private boolean matchesListingStatus(ListingStatus status, String filter) {
+        if (filter == null || "All Statuses".equals(filter)) return true;
+        return switch (filter) {
+            case "Active (Live / Pending / Reserved / Rejected)" ->
+                    status == ListingStatus.LIVE || status == ListingStatus.PENDING_REVIEW
+                            || status == ListingStatus.RESERVED || status == ListingStatus.REJECTED;
+            case "Finished (Sold / Lent / Given / Removed)" ->
+                    status == ListingStatus.SOLD || status == ListingStatus.LENT
+                            || status == ListingStatus.GIVEN || status == ListingStatus.REMOVED;
+            case "Pending Review" -> status == ListingStatus.PENDING_REVIEW;
+            case "Live" -> status == ListingStatus.LIVE;
+            case "Rejected" -> status == ListingStatus.REJECTED;
+            case "Reserved" -> status == ListingStatus.RESERVED;
+            case "Sold" -> status == ListingStatus.SOLD;
+            case "Lent" -> status == ListingStatus.LENT;
+            case "Given" -> status == ListingStatus.GIVEN;
+            case "Removed" -> status == ListingStatus.REMOVED;
+            default -> true;
+        };
+    }
+
+    private boolean hasListingFilters() {
+        return !listingKeyword.isBlank()
+                || !"All Categories".equals(listingCategory)
+                || !"All Types".equals(listingType)
+                || !"All Statuses".equals(listingStatus);
+    }
+
+    private String listingFilterSummary() {
+        String search = listingKeyword.isBlank() ? "all keywords" : "\"" + listingKeyword + "\"";
+        return "Filter: " + search + " · " + listingCategory + " · " + listingType + " · " + listingStatus;
+    }
+
     private String requestDescription(Map<String, Object> request) {
         String type = (String) request.get("request_type");
         return switch (type == null ? "" : type) {
-            case "OFFER" -> {
-                String text = "Offer: HK$" + request.get("offer_price");
-                if (request.get("counter_price") != null) {
-                    text += " · Counter HK$" + request.get("counter_price");
-                }
-                yield text;
-            }
+            case "OFFER" -> "Offer: HK$" + request.get("offer_price");
             case "BORROW" -> {
                 Object days = request.get("proposed_days");
                 yield "Borrow request: " + days + (Integer.valueOf(1).equals(days) ? " day" : " days");
@@ -157,7 +277,7 @@ public class SellerDashboardController {
 
         VBox info = new VBox(4);
         HBox.setHgrow(info, Priority.ALWAYS);
-        Label title = new Label(l.getTitle() + " (#" + l.getId() + ")");
+        Label title = new Label(l.getTitle());
         title.setStyle("-fx-font-weight: bold; -fx-font-size: 15px;");
         Label meta = new Label(l.getCategory() + " · " + l.getTypeDisplay() + " · " + l.getMeetupLocation());
         meta.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 12px;");
@@ -579,7 +699,6 @@ public class SellerDashboardController {
                 ? "Chat about " + listing.getTitle()
                 : "Chat with " + buyerUsername + " about " + listing.getTitle());
         dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
-        ((Button) dialog.getDialogPane().lookupButton(ButtonType.CLOSE)).setText("X");
         VBox chat = createSellerListingChat(listing, buyerUsername);
         chat.setPrefWidth(480);
         dialog.getDialogPane().setContent(chat);
@@ -620,12 +739,16 @@ public class SellerDashboardController {
                 super.updateItem(message, empty);
                 if (empty || message == null) {
                     setText(null);
+                    setStyle("");
                 } else {
                     String timestamp = message.getTimestamp() == null ? ""
                             : message.getTimestamp().format(
                             DateTimeFormatter.ofPattern("dd MMM HH:mm:ss", Locale.ENGLISH));
-                    setText(message.getSender_id() + " (" + timestamp + ")\n" + message.getContent());
+                    boolean system = "system".equalsIgnoreCase(message.getSender_role());
+                    String who = system ? "Announcement" : message.getSender_id();
+                    setText(who + " (" + timestamp + ")\n" + message.getContent());
                     setWrapText(true);
+                    setStyle(system ? "-fx-text-fill: #8a5a00; -fx-font-style: italic;" : "");
                 }
             }
         });
@@ -686,15 +809,14 @@ public class SellerDashboardController {
             if (buyer == null) return;
             try {
                 Map<String, Object> open = DataService.getOpenListingRequestForBuyer(listing.getId(), buyer);
-                if (open == null || !"PENDING".equals(String.valueOf(open.get("status")))) {
-                    offerStatus.setText(open == null
-                            ? "No pending offer from this buyer. Waiting for their offer."
-                            : "Waiting for the buyer to respond to your counter.");
+                String status = open == null ? null : String.valueOf(open.get("status"));
+                if (open == null || (!"PENDING".equals(status) && !"COUNTERED".equals(status))) {
+                    offerStatus.setText("No pending offer from this buyer. Negotiate in chat — only the buyer can submit a formal price offer.");
                     return;
                 }
                 int requestId = ((Number) open.get("request_id")).intValue();
-                String requestType = String.valueOf(open.get("request_type"));
-                offerStatus.setText("Pending " + requestDescription(open) + " — respond in this chat room.");
+                offerStatus.setText("Pending " + requestDescription(open)
+                        + " — Accept or Decline here. Negotiate price in chat; only the buyer updates the formal offer.");
                 Button accept = new Button("Accept Offer");
                 accept.getStyleClass().add("btn-gold");
                 Button decline = new Button("Decline");
@@ -722,44 +844,6 @@ public class SellerDashboardController {
                     }
                 });
                 offerActions.getChildren().addAll(accept, decline);
-                if ("OFFER".equals(requestType) || "BORROW".equals(requestType)) {
-                    Button counter = new Button("Counter");
-                    counter.getStyleClass().add("btn-outline");
-                    counter.setOnAction(event -> {
-                        boolean borrow = "BORROW".equals(requestType);
-                        TextInputDialog dialog = new TextInputDialog();
-                        dialog.setTitle("Counter in Chat");
-                        dialog.setHeaderText(borrow
-                                ? "Counter this borrow request with a different period."
-                                : "Counter this offer with a different price.");
-                        dialog.setContentText(borrow ? "Counter days:" : "Counter price (HK$):");
-                        DialogStyle.showAndWait(dialog).ifPresent(raw -> {
-                            try {
-                                String value = raw == null ? "" : raw.trim();
-                                if (borrow) {
-                                    int days = Integer.parseInt(value);
-                                    DataService.resolveSellerRequest(requestId, "COUNTER", null, days);
-                                    DataService.sendSellerListingChatMessage(listing.getId(), buyer,
-                                            "[Formal counter] " + days + (days == 1 ? " day" : " days"));
-                                } else {
-                                    double price = Double.parseDouble(value);
-                                    DataService.resolveSellerRequest(requestId, "COUNTER", price, null);
-                                    DataService.sendSellerListingChatMessage(listing.getId(), buyer,
-                                            "[Formal counter] HK$" + String.format(Locale.ROOT, "%.2f", price));
-                                }
-                                feedback.setText("Counter sent in chat. Waiting for the buyer.");
-                                reloadMessages.run();
-                            } catch (NumberFormatException ex) {
-                                feedback.setText(borrow
-                                        ? "Enter a whole number of counter days."
-                                        : "Enter a valid counter price.");
-                            } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
-                                feedback.setText("Could not counter: " + e.getMessage());
-                            }
-                        });
-                    });
-                    offerActions.getChildren().add(counter);
-                }
             } catch (IllegalStateException | SecurityException e) {
                 offerStatus.setText("Could not load offer state: " + e.getMessage());
             }
@@ -846,54 +930,18 @@ public class SellerDashboardController {
                 chat.getStyleClass().add("btn-outline");
                 int requestId = ((Number) request.get("request_id")).intValue();
                 String buyerUsername = String.valueOf(request.get("buyer_username"));
-                String requestType = String.valueOf(request.get("request_type"));
                 accept.setOnAction(event -> resolveListingRequest(
                         listing, requestId, "ACCEPT", null, null, requests, feedback));
                 decline.setOnAction(event -> resolveListingRequest(
                         listing, requestId, "DECLINE", null, null, requests, feedback));
                 chat.setOnAction(event -> showSellerListingChat(listing, buyerUsername));
-                HBox actions = new HBox(8, accept, decline);
-                if ("OFFER".equals(requestType) || "BORROW".equals(requestType)) {
-                    Button counter = new Button("Counter");
-                    counter.getStyleClass().addAll("btn-outline");
-                    counter.setOnAction(event -> promptCounterOffer(
-                            listing, requestId, requestType, requests, feedback));
-                    actions.getChildren().add(counter);
-                }
-                actions.getChildren().add(chat);
+                HBox actions = new HBox(8, accept, decline, chat);
                 card.getChildren().addAll(buyer, summary, actions);
                 requests.getChildren().add(card);
             }
         } catch (IllegalStateException | SecurityException e) {
             feedback.setText("Could not load incoming requests: " + e.getMessage());
         }
-    }
-
-    private void promptCounterOffer(Listing listing, int requestId, String requestType,
-                                    VBox requests, Label feedback) {
-        boolean borrow = "BORROW".equals(requestType);
-        TextInputDialog dialog = new TextInputDialog();
-        dialog.setTitle("Counter Offer");
-        dialog.setHeaderText(borrow
-                ? "Propose a different lending period for this borrow request."
-                : "Propose a different price for this sale offer.");
-        dialog.setContentText(borrow ? "Counter days:" : "Counter price (HK$):");
-        DialogStyle.showAndWait(dialog).ifPresent(raw -> {
-            try {
-                String value = raw == null ? "" : raw.trim();
-                if (borrow) {
-                    int days = Integer.parseInt(value);
-                    resolveListingRequest(listing, requestId, "COUNTER", null, days, requests, feedback);
-                } else {
-                    double price = Double.parseDouble(value);
-                    resolveListingRequest(listing, requestId, "COUNTER", price, null, requests, feedback);
-                }
-            } catch (NumberFormatException ex) {
-                feedback.setText(borrow
-                        ? "Enter a whole number of counter days."
-                        : "Enter a valid counter price.");
-            }
-        });
     }
 
     private void resolveListingRequest(Listing listing, int requestId, String action, Double price,
@@ -903,7 +951,7 @@ public class SellerDashboardController {
             feedback.setText(switch (action) {
                 case "ACCEPT" -> "Request accepted. The buyer has been notified.";
                 case "DECLINE" -> "Request declined. The buyer has been notified.";
-                default -> "Counteroffer sent to the buyer.";
+                default -> "Request updated.";
             });
             refreshListingRequests(listing, requests, feedback);
         } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
@@ -1133,8 +1181,6 @@ public class SellerDashboardController {
                 VBox item = new VBox(6);
                 item.getStyleClass().add("card");
                 item.setPadding(new Insets(12));
-                Label stars = new Label("★".repeat(Math.max(0, r.getRating())) + "☆".repeat(Math.max(0, 5 - r.getRating())));
-                stars.setStyle("-fx-text-fill: #A68137; -fx-font-size: 16px;");
                 Label comment = new Label(r.getComment() == null || r.getComment().isBlank()
                         ? "(No written feedback)" : r.getComment());
                 comment.setWrapText(true);
@@ -1157,7 +1203,7 @@ public class SellerDashboardController {
                 flag.setDisable(r.isFlagged());
                 flag.setOnAction(e -> flagReview(r));
                 actions.getChildren().addAll(reply, flag);
-                item.getChildren().addAll(stars, comment, meta, replyLabel);
+                item.getChildren().addAll(StarRating.graphic(r.getScore()), comment, meta, replyLabel);
                 if (r.isFlagged()) {
                     item.getChildren().add(styled("Flagged for admin moderation.",
                             "-fx-text-fill: #c62828; -fx-font-size: 12px; -fx-font-weight: bold;"));
