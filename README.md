@@ -1,33 +1,29 @@
-# HKUST Marketplace — Frontend Demo / Skeleton
+# HKUST Marketplace — Team 16
 
-A complete **JavaFX + Maven** frontend-only demo of the HKUST Campus Marketplace platform.  
-Designed as a **skeleton / starter code** for students to implement the full project requirements (backend, persistence, real business logic, etc.).
+A **JavaFX + Maven** desktop application for buying, selling, lending, and giving away items on campus. The Buyer, Seller, and Admin portals share a local SQLite database.
 
 ## Prerequisites
 
-1. **JDK 17 or newer** (full JDK, not only JRE)
-   - Download: https://adoptium.net/ (Temurin 17 or 21 recommended)
-   - After install, open a **new** PowerShell and check:
-     ```powershell
-     java -version
-     javac -version
-     ```
-   - Both commands must work. If `javac` is missing, you only have a JRE — install the JDK.
+1. **JDK 17 or newer.** Install a full JDK, then open a new terminal and check that both commands report version 17 or newer. [Download a JDK](https://adoptium.net/)
 
-2. **Maven is optional** — this project includes the **Maven Wrapper** (`mvnw.cmd` on Windows).
+   ```powershell
+   java -version
+   javac -version
+   ```
+
+2. **Maven is optional.** The project includes the Maven Wrapper. The first run needs internet access to download Maven and project dependencies.
 
 ## How to Run (Windows)
 
-Open **PowerShell** or **Command Prompt** in the project folder  
-(`...\HKUST-Marketplace\HKUST-Marketplace`):
+Open **PowerShell** in the project folder containing `pom.xml` and run the following command.
 
 ```powershell
 .\mvnw.cmd clean javafx:run
 ```
 
-First run downloads Maven automatically (needs internet). Then the app window should open.
+The welcome screen lets you choose Buyer, Seller, or Admin. On first launch, the app creates `data.db` and loads the demo accounts and listings. On macOS or Linux, use `sh mvnw clean javafx:run` from the same folder.
 
-### Alternative: if you already installed Maven and added it to PATH
+### Alternative if Maven is on your PATH
 
 ```powershell
 mvn clean javafx:run
@@ -35,94 +31,128 @@ mvn clean javafx:run
 
 ### Run from IntelliJ IDEA
 
-1. Open the project folder as a Maven project
-2. Wait for dependencies to download
-3. Open `MarketplaceApp.java` → right-click → **Run**
+1. Open the project folder as a Maven project.
+2. Select JDK 17 or newer as the project SDK and let Maven load the dependencies.
+3. Run the `javafx:run` goal from the Maven tool window.
 
 ### Run from VS Code
 
-1. Install **Extension Pack for Java**
-2. Open the folder
-3. Run `MarketplaceApp.java`
+1. Install **Extension Pack for Java**.
+2. Open the folder containing `pom.xml`.
+3. Run the wrapper command above in the integrated terminal.
 
 ## Demo Credentials
 
-| Role   | Username  | Password   |
-|--------|-----------|------------|
-| Admin  | `admin`   | `admin123` |
-| Buyer  | `alice`   | `password1`|
-| Buyer  | `bob`     | `password1`|
-| Seller | `charlie` | `password1`|
-| Seller | `diana`   | `password1`|
+Choose the portal matching the account’s role on the welcome screen.
 
-## Features Implemented (UI Only)
+| Role   | Username  | Password    |
+|--------|-----------|-------------|
+| Admin  | `admin`   | `admin123`  |
+| Buyer  | `alice`   | `password1` |
+| Buyer  | `bob`     | `password1` |
+| Seller | `charlie` | `password1` |
+| Seller | `diana`   | `password1` |
+
+## Features Implemented
 
 ### Shared
-- Welcome screen with role selection (Buyer / Seller / Admin)
-- HKUST branding (logo + colour palette: deep blue `#003974` + gold `#A68137`)
-- Modern card-based UI, icons (Ikonli), consistent sidebars & top bars
-- In-memory dummy data (no database / no network)
+
+- Role-specific sign-in and BCrypt password storage.
+- SQLite stores accounts, listings, requests, reviews, favourites, and notifications. Listing photos are copied into `uploads/`, and the default chat history file is `chat_history.json`. These paths are relative to the working directory.
 
 ### Buyer Portal
-- Registration, Login, Browse Marketplace, Make Offer / Borrow / Claim
-- My Deals, Deal History, Favourites (placeholder), Notifications, Profile
+
+- Register, browse listings, save favourites, and message sellers.
+- Make purchase offers, request loans, claim giveaways, track deals, and rate sellers after completion.
 
 ### Seller Portal
-- Registration, Login, Create Listing, My Listings
-- Seller Stats (charts), Reviews & Feedback, Notifications, Profile
+
+- Register, submit listings with photos for review, and manage them in **My Listings**.
+- Respond to offers and requests, mark deals complete, and view statistics, reviews, and notifications.
 
 ### Admin Portal
-- Login only (seeded), Listing Review (approve/reject)
-- Manage Users, All Listings, All Deals, Seller Ratings, Notifications, Profile
+
+- Approve or reject submissions, edit published listings, and take listings down.
+- Manage user accounts, inspect deals and seller ratings, and follow up on notifications.
 
 ## Project Structure
 
-```
-HKUST-Marketplace/
-├── mvnw / mvnw.cmd          ← Maven Wrapper (use these!)
+```text
+HKUST_marketplace_T16/
+├── mvnw / mvnw.cmd
 ├── pom.xml
 ├── README.md
-└── src/main/
-    ├── java/com/hkust/marketplace/
-    │   ├── MarketplaceApp.java
-    │   ├── controllers/
-    │   ├── models/
-    │   └── utils/
-    └── resources/
-        ├── fxml/
-        ├── css/styles.css
-        └── images/hkust_logo.png
+└── src/
+    ├── main/
+    │   ├── java/com/hkust/marketplace/
+    │   │   ├── MarketplaceApp.java
+    │   │   ├── controllers/
+    │   │   ├── models/
+    │   │   └── utils/
+    │   └── resources/
+    │       ├── fxml/
+    │       ├── css/styles.css
+    │       └── images/
+    └── test/java/com/hkust/marketplace/
 ```
 
 ## Troubleshooting
 
 ### `mvn` is not recognized
-Use the wrapper instead:
+
+Use the included wrapper from the project folder.
+
 ```powershell
 .\mvnw.cmd clean javafx:run
 ```
 
-### `java` / `javac` not recognized
-Install JDK 17+ from https://adoptium.net/ and **restart the terminal**.  
-Make sure the installer option “Add to PATH” was checked.
+### `java` or `javac` is not recognized
 
-### Build fails with JavaFX / DISPLAY errors
-You need a normal desktop session (not a headless server). On Windows this is usually fine.
+Set `JAVA_HOME` to your JDK installation, add its `bin` folder to `PATH`, and restart the terminal.
 
-### To see the real error
+### JavaFX reports a display error
+
+Launch the app and the optional JavaFX screen tests in a graphical desktop session.
+
+### To see the underlying error
+
 ```powershell
 .\mvnw.cmd clean javafx:run -e
 ```
-Copy the lines that start with `Exception in thread` or `Caused by`.
 
-## For Students — Next Steps (Backend)
+Look for the first relevant `Caused by` line in the Maven output.
 
-1. Replace `DummyDataService` with real repositories / REST clients
-2. Hash passwords (BCrypt) — never store plaintext
-3. Add JWT / session auth and enforce RBAC on the API
-4. Persist data in a database
-5. Photo upload, chat, auto-return for borrowed items, etc.
+## For the TA — Grading Guide
+
+### Follow a sale across all three portals
+
+Start from a fresh checkout for the seeded **Mini Fridge** example. Sign out between roles. Restarting from the same folder preserves your progress.
+
+1. **Admin (`admin`).** Open **Listing Review**, select Diana’s **Mini Fridge**, and approve it. The listing is published and Diana receives an approval notification.
+2. **Buyer (`alice`).** Find **Mini Fridge** in **Browse Marketplace**. Open it, choose **Make Offer**, and submit a price such as HK$350.
+3. **Seller (`diana`).** Open **Mini Fridge** in **My Listings**. Under **Incoming offers & requests**, check Alice’s price and select **Accept**. Reopen the listing and choose **Mark Complete**. The sale stays open until Alice also confirms.
+4. **Buyer (`alice`).** Open **My Deals** and choose **Mark complete** for the fridge. The app confirms completion and prompts Alice to rate the seller.
+
+To check the other listing types, use **Graphing Calculator TI-84** for a borrow request and **IKEA Desk Lamp** for a giveaway claim.
+
+### Run the automated tests
+
+Run the default JUnit suite from the project folder. Maven writes the detailed results to `target/surefire-reports/`.
+
+```powershell
+.\mvnw.cmd test
+```
+
+To include the JavaFX admin screen tests, run the suite in a desktop session with the opt-in flag.
+
+```powershell
+.\mvnw.cmd "-Dmarketplace.uiTests=true" test
+```
+
+On macOS or Linux, replace `.\mvnw.cmd` with `sh mvnw`.
+
+**Verified result at `413bffd` (JDK 21, Windows).** The default run reported 117 passed, 1 failed, and 6 skipped. The six skips are the opt-in JavaFX screen test classes. The failing test in `AdminRatingsOverviewTest` expected a legacy review with no date to stay undated, but it received a timestamp.
 
 ## Licence
 
-Educational use — HKUST COMP project skeleton.
+Educational use — HKUST COMP project.
