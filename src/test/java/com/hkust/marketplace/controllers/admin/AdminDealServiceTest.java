@@ -4,6 +4,7 @@ import com.hkust.marketplace.models.*;
 import com.hkust.marketplace.utils.*;
 import org.junit.*;
 import org.junit.rules.TemporaryFolder;
+import java.time.LocalDateTime;
 import java.util.List;
 import static org.junit.Assert.*;
 
@@ -155,6 +156,81 @@ public class AdminDealServiceTest {
         assertEquals("buyer", records.get(0).buyerUsername());
         assertEquals("seller", records.get(0).sellerUsername());
         assertEquals(ListingType.LEND, records.get(0).dealType());
+    }
+
+    @Test public void returnedLoanStaysInDealHistoryWhenAnotherBuyerRequestsTheSameListing() {
+        var admin = SessionManager.getCurrentUser();
+        var seller = DataService.authenticate("seller", "Password123", UserRole.SELLER);
+        var firstBuyer = DataService.authenticate("buyer", "Password123", UserRole.BUYER);
+        DataService.registerBuyer("secondbuyer", "Second Buyer", "Password123", "Password123", null);
+        var secondBuyer = DataService.authenticate("secondbuyer", "Password123", UserRole.BUYER);
+
+        SessionManager.login(seller);
+        var camera = new Listing();
+        camera.setTitle("Digital Camera");
+        camera.setType(ListingType.LEND);
+        camera.setCategory("Electronics");
+        camera.setCondition("Used");
+        camera.setDescription("Camera available to borrow.");
+        camera.setMeetupLocation("Library");
+        camera.setLendingDays(2);
+        DataService.submitListing(camera, List.of());
+
+        SessionManager.login(admin);
+        var pending = DataService.getPendingListings().get(0);
+        String listingId = pending.getId();
+        DataService.approveListing(listingId, pending.getReviewVersion());
+
+        SessionManager.login(firstBuyer);
+        var firstStart = LocalDateTime.now().plusMinutes(1);
+        int returnedRequest = DataService.submitBorrowRequest(listingId, firstStart, firstStart.plusHours(1));
+        SessionManager.login(seller);
+        DataService.resolveSellerRequest(returnedRequest, "ACCEPT", null);
+        SessionManager.login(firstBuyer);
+        DataService.selfReturnBorrow(returnedRequest);
+
+        SessionManager.login(seller);
+        assertTrue("A returned loan should not lock a live listing",
+                DataService.canSellerModifyListing(listingId));
+
+        SessionManager.login(admin);
+        assertEquals(List.of(returnedRequest), ids(null, ListingType.LEND, "Returned"));
+
+        SessionManager.login(secondBuyer);
+        var secondStart = LocalDateTime.now().plusMinutes(1);
+        int pendingRequest = DataService.submitBorrowRequest(listingId, secondStart, secondStart.plusHours(1));
+
+        SessionManager.login(admin);
+        assertEquals("The returned loan should remain in admin history after a new request",
+                List.of(returnedRequest), ids(null, ListingType.LEND, "Returned"));
+
+        SessionManager.login(firstBuyer);
+        var buyerDeal = DataService.getBuyerDeals().get(0);
+        assertEquals("ACCEPTED", buyerDeal.get("status"));
+        assertNotNull(buyerDeal.get("returned_at"));
+
+        SessionManager.login(seller);
+        assertEquals(Integer.valueOf(1), DataService.getSellerActivityStats().get("completed"));
+        assertFalse("The new pending request should still lock the listing",
+                DataService.canSellerModifyListing(listingId));
+        DataService.resolveSellerRequest(pendingRequest, "DECLINE", null);
+        var liveCamera = DataService.getSellerListings().get(0);
+        DataService.deleteSellerListing(listingId, liveCamera.getReviewVersion());
+        assertTrue(DataService.getLiveListings().isEmpty());
+
+        SessionManager.login(admin);
+        assertEquals("Deleting the listing should preserve the returned loan",
+                List.of(returnedRequest), ids(null, ListingType.LEND, "Returned"));
+    }
+
+    @Test public void initializationRestoresReturnedLoansPreviouslyMarkedDeclined() throws Exception {
+        addDeal(1, "Returned Camera", "LEND", "DECLINED", "2026-11-01T09:00:00",
+                "2026-11-01T12:00:00", "2026-11-01T12:00:00");
+        addDeal(2, "Declined Camera", "LEND", "DECLINED", "2026-11-01T09:00:00", null, null);
+
+        DatabaseManager.initialize();
+
+        assertEquals(List.of(1), ids(null, ListingType.LEND, "Returned"));
     }
 
     @Test public void ongoingBorrowsExposeTheScheduledReturnWithoutClaimingAnActualReturn() throws Exception {

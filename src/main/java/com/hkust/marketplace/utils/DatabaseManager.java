@@ -189,6 +189,7 @@ public class DatabaseManager {
             """);
         migrateNotificationSchema();
         migrateBuyerDealColumns();
+        restoreMisclassifiedReturnedLoans();
         migrateLegacyCounteredOffers();
         migrateAdminNotificationSchema();
         runSql("""
@@ -413,6 +414,14 @@ public class DatabaseManager {
                 UPDATE listing_requests
                 SET status = 'PENDING', counter_price = NULL, updated_at = updated_at
                 WHERE status = 'COUNTERED'
+                """);
+    }
+
+    private static void restoreMisclassifiedReturnedLoans() {
+        // Earlier cleanup could decline an accepted borrow after it had already been returned.
+        runSql("""
+                UPDATE listing_requests SET status = 'ACCEPTED'
+                WHERE request_type = 'BORROW' AND status = 'DECLINED' AND returned_at IS NOT NULL
                 """);
     }
 
@@ -1015,6 +1024,7 @@ public class DatabaseManager {
                     try (PreparedStatement active = connection.prepareStatement("""
                             SELECT COUNT(*) FROM listing_requests
                             WHERE listing_id = ? AND status IN ('PENDING', 'COUNTERED', 'ACCEPTED')
+                                AND completed_at IS NULL AND returned_at IS NULL
                             """)) {
                         active.setInt(1, listingId);
                         try (ResultSet result = active.executeQuery()) {
@@ -1083,16 +1093,6 @@ public class DatabaseManager {
                     insertNotification(connection, canonicalUsername, admin, "Listing Updated",
                             admin + " updated '" + listing.getTitle() + "'. Its status is unchanged.", "System", null, listingId);
                 } else {
-                    // Editing restarts review; any prior ACCEPTED deal on this listing_id is no longer valid.
-                    try (PreparedStatement invalidate = connection.prepareStatement("""
-                            UPDATE listing_requests
-                            SET status = 'DECLINED', updated_at = ?
-                            WHERE listing_id = ? AND status = 'ACCEPTED'
-                            """)) {
-                        invalidate.setString(1, submittedAt.toString());
-                        invalidate.setInt(2, listingId);
-                        invalidate.executeUpdate();
-                    }
                     try (PreparedStatement statement = connection.prepareStatement("""
                             INSERT INTO notifications (username, sender, title, message, category, timestamp, listing_id)
                             SELECT username, ?, 'Listing Updated - Review Required', ?, 'Listing Review', ?, ?
@@ -1299,13 +1299,14 @@ public class DatabaseManager {
         return true;
     }
 
-    /** Permanently removes a seller-owned listing and its saved favourites. */
+    /** Removes a seller-owned listing from the marketplace and keeps it if requests reference it. */
     public static void deleteSellerListing(String listingId, String sellerUsername, long expectedVersion) {
         if (sellerUsername == null || sellerUsername.isBlank()) {
             throw new IllegalArgumentException("A seller account is required.");
         }
         int id = parseListingId(listingId);
         List<String> photos = new ArrayList<>();
+        boolean hasRequestHistory;
         try (Connection connection = connect()) {
             connection.setAutoCommit(false);
             try {
@@ -1339,6 +1340,7 @@ public class DatabaseManager {
                 try (PreparedStatement active = connection.prepareStatement("""
                         SELECT COUNT(*) FROM listing_requests
                         WHERE listing_id = ? AND status IN ('PENDING', 'COUNTERED', 'ACCEPTED')
+                            AND completed_at IS NULL AND returned_at IS NULL
                         """)) {
                     active.setInt(1, id);
                     try (ResultSet result = active.executeQuery()) {
@@ -1353,10 +1355,21 @@ public class DatabaseManager {
                     statement.setInt(1, id);
                     statement.executeUpdate();
                 }
+                // Keep listing details and photos available to buyers and admins viewing past deals.
+                try (PreparedStatement history = connection.prepareStatement(
+                        "SELECT 1 FROM listing_requests WHERE listing_id = ? LIMIT 1")) {
+                    history.setInt(1, id);
+                    try (ResultSet result = history.executeQuery()) {
+                        hasRequestHistory = result.next();
+                    }
+                }
+                String removal = hasRequestHistory
+                        ? "UPDATE listings SET listing_status = 'REMOVED', availability_status = 'Unavailable'"
+                        : "DELETE FROM listings";
                 try (PreparedStatement statement = connection.prepareStatement("""
-                        DELETE FROM listings WHERE listing_id = ? AND seller_username = ? COLLATE NOCASE
+                        %s WHERE listing_id = ? AND seller_username = ? COLLATE NOCASE
                             AND review_version = ?
-                        """)) {
+                        """.formatted(removal))) {
                     statement.setInt(1, id);
                     statement.setString(2, sellerUsername);
                     statement.setLong(3, expectedVersion);
@@ -1377,12 +1390,12 @@ public class DatabaseManager {
         } catch (SQLException e) {
             throw new IllegalStateException("Could not delete listing.", e);
         }
-        deleteStoredPhotos(photos, "deleted");
+        if (!hasRequestHistory) deleteStoredPhotos(photos, "deleted");
     }
 
     /**
      * Strict COMP3111 rule: sellers may edit/delete only while the listing is still open
-     * (LIVE / PENDING_REVIEW / REJECTED) and has no PENDING, COUNTERED, or ACCEPTED requests.
+     * (LIVE / PENDING_REVIEW / REJECTED) and has no unfinished requests.
      */
     public static boolean canSellerModifyListing(String sellerUsername, int listingId) {
         try (Connection connection = connect()) {
@@ -1405,6 +1418,7 @@ public class DatabaseManager {
             try (PreparedStatement active = connection.prepareStatement("""
                     SELECT COUNT(*) FROM listing_requests
                     WHERE listing_id = ? AND status IN ('PENDING', 'COUNTERED', 'ACCEPTED')
+                        AND completed_at IS NULL AND returned_at IS NULL
                     """)) {
                 active.setInt(1, listingId);
                 try (ResultSet result = active.executeQuery()) {
@@ -1424,6 +1438,7 @@ public class DatabaseManager {
                      WHERE r.listing_id = ?
                          AND (l.seller = ? COLLATE NOCASE OR l.seller_username = ? COLLATE NOCASE)
                          AND r.status IN ('PENDING', 'COUNTERED', 'ACCEPTED')
+                         AND r.completed_at IS NULL AND r.returned_at IS NULL
                      """)) {
             statement.setInt(1, listingId);
             statement.setString(2, sellerUsername);
@@ -1545,7 +1560,7 @@ public class DatabaseManager {
                         throw new IllegalStateException("Listing is no longer pending or the admin account is inactive.");
                     }
                 }
-                // Re-approving a listing to LIVE must not keep old ACCEPTED deals attached to it.
+                // Re-approval clears stale open deals while preserving completed history.
                 if (approved) {
                     clearStaleAcceptedRequests(connection, listingId);
                     try (PreparedStatement available = connection.prepareStatement("""
@@ -1764,7 +1779,7 @@ public class DatabaseManager {
                 if (!ok) throw new IllegalArgumentException("Request type does not match this listing.");
             }
         }
-        // LIVE + Available means the listing is active again. Clear stale ACCEPTED rows left from
+        // LIVE + Available means the listing is active again. Clear stale open deals left from
         // earlier accepts/edits so buyers can keep offering on this live listing.
         clearStaleAcceptedRequests(connection, listingId);
     }
@@ -1775,6 +1790,7 @@ public class DatabaseManager {
                 UPDATE listing_requests
                 SET status = 'DECLINED', updated_at = ?
                 WHERE listing_id = ? AND status = 'ACCEPTED'
+                    AND completed_at IS NULL AND returned_at IS NULL
                     AND EXISTS (
                         SELECT 1 FROM listings l
                         WHERE l.listing_id = ?
