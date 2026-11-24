@@ -726,6 +726,7 @@ public class DataService {
                 (String) row.get("message"),
                 (String) row.get("category"));
         notification.setId(row.get("notification_id").toString());
+        notification.setSender((String) row.get("sender"));
         notification.setTimestamp(parseDate((String) row.get("timestamp")));
         notification.setRead(((Number) row.get("is_read")).intValue() != 0);
         if (row.get("request_id") instanceof Number requestId) notification.setRequestId(requestId.intValue());

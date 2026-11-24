@@ -28,7 +28,9 @@ import javafx.scene.layout.*;
 import javafx.scene.paint.Color;
 import javafx.scene.shape.Circle;
 import javafx.util.Duration;
+import javafx.util.converter.DoubleStringConverter;
 
+import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -1584,22 +1586,53 @@ public class BuyerDashboardController {
         dialog.setTitle("Rate seller");
         dialog.setHeaderText("Rate the seller for " + itemName);
         dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
-        Spinner<Double> stars = new Spinner<>(0.0, 5.0, 5.0, 0.5);
+        var values = new SpinnerValueFactory.DoubleSpinnerValueFactory(1.0, 5.0, 5.0, 0.5);
+        values.setConverter(new DoubleStringConverter() {
+            @Override
+            public Double fromString(String text) {
+                try {
+                    return parseRating(text);
+                } catch (IllegalArgumentException ignored) {
+                    // Keep the typed text for validation when the user submits.
+                    return values.getValue();
+                }
+            }
+        });
+        Spinner<Double> stars = new Spinner<>(values);
         stars.setEditable(true);
         TextArea comment = new TextArea();
         comment.setPromptText("Optional short review");
         comment.setPrefRowCount(3);
-        dialog.getDialogPane().setContent(new VBox(8,
-                new Label("Rating from 0.0 to 5.0"), stars, comment));
-        DialogStyle.showAndWait(dialog).ifPresent(response -> {
-            if (response != ButtonType.OK) return;
+        Label ratingLabel = new Label("Rating from 1 to 5");
+        ratingLabel.setLabelFor(stars);
+        Label error = errorLabel("");
+        error.setWrapText(true);
+        dialog.getDialogPane().setContent(new VBox(8, ratingLabel, stars, comment, error));
+
+        Button ok = (Button) dialog.getDialogPane().lookupButton(ButtonType.OK);
+        ok.addEventFilter(ActionEvent.ACTION, event -> {
             try {
-                DataService.rateCompletedDeal(requestId, stars.getValue(), comment.getText());
-                alert(Alert.AlertType.INFORMATION, "Your rating was saved.");
+                double rating = parseRating(stars.getEditor().getText());
+                DataService.rateCompletedDeal(requestId, rating, comment.getText());
+            } catch (NumberFormatException ex) {
+                error.setText("Enter a number from 1 to 5.");
+                event.consume();
             } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
-                alert(Alert.AlertType.ERROR, ex.getMessage());
+                error.setText(ex.getMessage());
+                event.consume();
             }
         });
+        if (DialogStyle.showAndWait(dialog).orElse(ButtonType.CANCEL) == ButtonType.OK) {
+            alert(Alert.AlertType.INFORMATION, "Your rating was saved.");
+        }
+    }
+
+    private static double parseRating(String text) {
+        BigDecimal rating = new BigDecimal(text.trim());
+        if (rating.compareTo(BigDecimal.ONE) < 0 || rating.compareTo(BigDecimal.valueOf(5)) > 0) {
+            throw new IllegalArgumentException("Rating must be between 1 and 5.");
+        }
+        return rating.doubleValue();
     }
 
     private void closeScreen(String message) {

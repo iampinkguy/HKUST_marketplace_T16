@@ -3356,8 +3356,8 @@ public class DatabaseManager {
     }
 
     public static void createBuyerReview(String buyerUsername, int requestId, double rating, String text) {
-        if (rating < 0.0 || rating > 5.0 || !Double.isFinite(rating)) {
-            throw new IllegalArgumentException("Rating must be between 0.0 and 5.0.");
+        if (rating < 1.0 || rating > 5.0 || !Double.isFinite(rating)) {
+            throw new IllegalArgumentException("Rating must be between 1 and 5.");
         }
         String comment = text == null ? "" : text.trim();
         if (comment.length() > 1000) {

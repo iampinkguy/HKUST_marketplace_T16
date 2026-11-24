@@ -300,6 +300,28 @@ public class BuyerMarketplaceCoverageTest {
     }
 
     @Test
+    public void buyerCanOnlyRateCompletedDealsFromOneToFive() {
+        Listing lamp = publish(ListingType.GIVEAWAY, "Desk Lamp", null, null, "Others");
+        loginBuyer();
+        int requestId = DataService.submitBuyerRequest(lamp.getId(), "CLAIM", null, null);
+        DataService.completeBuyerDeal(requestId);
+        SessionManager.login(seller());
+        Listing claimed = DataService.getSellerListings().get(0);
+        DataService.completeSellerListing(claimed.getId(), claimed.getReviewVersion());
+        loginBuyer();
+
+        for (double score : List.of(-1.0, 0.0, 0.5, 5.5, Double.NaN, Double.POSITIVE_INFINITY)) {
+            assertThrows("Invalid rating " + score, IllegalArgumentException.class,
+                    () -> DataService.rateCompletedDeal(requestId, score, ""));
+        }
+        assertTrue(DataService.getBuyerReviews().isEmpty());
+
+        DataService.rateCompletedDeal(requestId, 1.0, "");
+        assertEquals(1.0, DataService.getBuyerReviews().get(0).getScore(), 0.0);
+    }
+
+
+    @Test
     public void buyerCannotBorrowOrClaimTheirOwnListing() throws Exception {
         Listing lend = publish(ListingType.LEND, "Own Charger", null, 1, "Electronics");
         try (Connection connection = DatabaseManager.connect();
