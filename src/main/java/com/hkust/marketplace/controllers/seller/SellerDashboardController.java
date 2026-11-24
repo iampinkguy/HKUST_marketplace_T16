@@ -1158,6 +1158,10 @@ public class SellerDashboardController {
 
     @FXML
     private void showReviews() {
+        showReviews(null);
+    }
+
+    private void showReviews(Notification ratingNotification) {
         setActive(btnReviews, "Reviews & Feedback");
         contentPane.getChildren().clear();
 
@@ -1166,7 +1170,7 @@ public class SellerDashboardController {
 
         List<Review> reviews;
         try {
-            reviews = DataService.getReviewsForCurrentSeller();
+            reviews = new ArrayList<>(DataService.getReviewsForCurrentSeller());
         } catch (IllegalStateException | SecurityException ex) {
             root.getChildren().add(new Label("Could not load reviews: " + ex.getMessage()));
             contentPane.getChildren().add(new ScrollPane(root));
@@ -1176,6 +1180,21 @@ public class SellerDashboardController {
         root.getChildren().add(styled(
                 "Select a review to respond or flag it for admin moderation.",
                 "-fx-text-fill: #5a5a7a; -fx-font-size: 13px;"));
+
+        if (ratingNotification != null && ratingNotification.getListingId() != null
+                && ratingNotification.getSender() != null) {
+            String listingId = ratingNotification.getListingId().toString();
+            Review linkedReview = reviews.stream()
+                    .filter(review -> listingId.equals(review.getId())
+                            && ratingNotification.getSender().equalsIgnoreCase(review.getBuyerUsername()))
+                    .findFirst().orElse(null);
+            if (linkedReview == null) {
+                root.getChildren().add(new Label("The review linked to this notification is no longer visible."));
+            } else {
+                reviews.remove(linkedReview);
+                reviews.add(0, linkedReview);
+            }
+        }
 
         if (reviews.isEmpty()) {
             root.getChildren().add(new Label("No reviews yet."));
@@ -1321,7 +1340,8 @@ public class SellerDashboardController {
                 VBox item = new VBox(4);
                 item.getStyleClass().add("notif-item");
                 if (!notification.isRead()) item.setStyle("-fx-border-color: #003974; -fx-border-width: 0 0 0 3;");
-                String listingId = listingIdForNotification(notification, listings);
+                boolean rating = "Rating".equalsIgnoreCase(notification.getCategory());
+                String listingId = rating ? null : listingIdForNotification(notification, listings);
                 HBox footer = new HBox(8);
                 footer.setAlignment(Pos.CENTER_LEFT);
                 Region spacer = new Region();
@@ -1331,12 +1351,14 @@ public class SellerDashboardController {
                 footer.getChildren().add(styled(notification.getCategory() + " · " + when,
                         "-fx-text-fill: #9aa0b0; -fx-font-size: 11px;"));
                 footer.getChildren().add(spacer);
-                if (listingId != null) {
-                    Button go = new Button("Go ->");
+                if (rating || listingId != null) {
+                    Button go = new Button(rating ? "View review" : "Go ->");
                     go.getStyleClass().addAll("btn-outline", "btn-sm");
                     go.addEventFilter(MouseEvent.MOUSE_CLICKED, MouseEvent::consume);
-                    String targetId = listingId;
-                    go.setOnAction(event -> openNotificationListing(user, notification, targetId));
+                    go.setOnAction(event -> {
+                        if (rating) openRatingNotification(user, notification);
+                        else openNotificationListing(user, notification, listingId);
+                    });
                     footer.getChildren().add(go);
                 }
                 item.getChildren().addAll(
@@ -1345,6 +1367,10 @@ public class SellerDashboardController {
                         footer
                 );
                 item.setOnMouseClicked(event -> {
+                    if (rating) {
+                        openRatingNotification(user, notification);
+                        return;
+                    }
                     if (notification.isRead()) return;
                     if (!markNotificationRead(user, notification)) return;
                     item.setStyle(null);
@@ -1377,6 +1403,10 @@ public class SellerDashboardController {
         scroll.setFitToWidth(true);
         scroll.setStyle("-fx-background-color: transparent; -fx-background: transparent;");
         contentPane.getChildren().add(scroll);
+    }
+
+    private void openRatingNotification(User user, Notification notification) {
+        if (markNotificationRead(user, notification)) showReviews(notification);
     }
 
     private void openNotificationListing(User user, Notification notification, String listingId) {

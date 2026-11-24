@@ -110,19 +110,19 @@ public class DataService {
         String datasetKey = "marketplace-demo-v1";
         if (DatabaseManager.fetchRow("demo_data_seed", "dataset_key", datasetKey) != null) return;
         record DemoUser(String username, String fullName, String password, UserRole role,
-                        String residenceHall, String bio, String preferredMeetup, double rating, int ratingCount) {}
+                        String residenceHall, String bio, String preferredMeetup) {}
 
         List<DemoUser> demoUsers = List.of(
                 new DemoUser("admin", "HKUST Marketplace Admin", "admin123", UserRole.ADMIN,
-                        null, null, null, 0, 0),
+                        null, null, null),
                 new DemoUser("alice", "Alice Chan", "password1", UserRole.BUYER,
-                        "Hall 3", null, null, 0, 0),
+                        "Hall 3", null, null),
                 new DemoUser("bob", "Bob Wong", "password1", UserRole.BUYER,
-                        "Off-campus", null, null, 0, 0),
+                        "Off-campus", null, null),
                 new DemoUser("charlie", "Charlie Lee", "password1", UserRole.SELLER,
-                        null, "Final year CSE student selling textbooks and gadgets.", "Library", 4.7, 12),
+                        null, "Final year CSE student selling textbooks and gadgets.", "Library"),
                 new DemoUser("diana", "Diana Ng", "password1", UserRole.SELLER,
-                        null, "Selling furniture and kitchen items before graduation.", "Hall 5 Lobby", 4.3, 8)
+                        null, "Selling furniture and kitchen items before graduation.", "Hall 5 Lobby")
         );
         List<User> users = new ArrayList<>();
         for (DemoUser user : demoUsers) {
@@ -130,8 +130,6 @@ public class DataService {
             account.setResidenceHall(user.residenceHall());
             account.setBio(user.bio());
             account.setPreferredMeetup(user.preferredMeetup());
-            account.setAverageRating(user.rating());
-            account.setRatingCount(user.ratingCount());
             users.add(account);
         }
 
@@ -726,6 +724,7 @@ public class DataService {
                 (String) row.get("message"),
                 (String) row.get("category"));
         notification.setId(row.get("notification_id").toString());
+        notification.setSender((String) row.get("sender"));
         notification.setTimestamp(parseDate((String) row.get("timestamp")));
         notification.setRead(((Number) row.get("is_read")).intValue() != 0);
         if (row.get("request_id") instanceof Number requestId) notification.setRequestId(requestId.intValue());
