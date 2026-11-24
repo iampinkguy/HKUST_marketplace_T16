@@ -625,7 +625,6 @@ public class SellerDashboardController {
         edit.setOnAction(e -> showListingForm(listing));
         Button openChat = new Button("Open Chat Room");
         openChat.getStyleClass().add("btn-primary");
-        openChat.setOnAction(e -> showSellerListingChat(listing, null));
         actions.getChildren().addAll(edit, openChat);
         Map<String, Object> completableDeal = null;
         try {
@@ -657,6 +656,7 @@ public class SellerDashboardController {
         Label requestFeedback = new Label();
         requestFeedback.setWrapText(true);
         requestFeedback.setStyle("-fx-text-fill: #8a5a00;");
+        openChat.setOnAction(e -> showSellerListingChat(listing, null, requests, requestFeedback));
 
         root.getChildren().add(header);
         root.getChildren().add(photos);
@@ -695,7 +695,7 @@ public class SellerDashboardController {
         });
     }
 
-    private void showSellerListingChat(Listing listing, String buyerUsername) {
+    private void showSellerListingChat(Listing listing, String buyerUsername, VBox requests, Label requestFeedback) {
         Dialog<Void> dialog = new Dialog<>();
         dialog.setTitle("Chat room");
         dialog.setHeaderText(buyerUsername == null || buyerUsername.isBlank()
@@ -706,6 +706,7 @@ public class SellerDashboardController {
         chat.setPrefWidth(480);
         dialog.getDialogPane().setContent(chat);
         DialogStyle.showAndWait(dialog);
+        refreshListingRequests(listing, requests, requestFeedback);
     }
 
     private Label fact(String name, String value) {
@@ -937,7 +938,7 @@ public class SellerDashboardController {
                         listing, requestId, "ACCEPT", null, null, requests, feedback));
                 decline.setOnAction(event -> resolveListingRequest(
                         listing, requestId, "DECLINE", null, null, requests, feedback));
-                chat.setOnAction(event -> showSellerListingChat(listing, buyerUsername));
+                chat.setOnAction(event -> showSellerListingChat(listing, buyerUsername, requests, feedback));
                 HBox actions = new HBox(8, accept, decline, chat);
                 card.getChildren().addAll(buyer, summary, actions);
                 requests.getChildren().add(card);
