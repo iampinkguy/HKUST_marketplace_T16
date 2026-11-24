@@ -299,8 +299,11 @@ public class SellerDashboardController {
             mutable = false;
         }
         if (!mutable) {
-            Label locked = new Label(
-                    "Edit/Delete locked while reserved/sold/lent/given/removed, or while offers/deals are active. Resolve them first.");
+            String message = switch (l.getStatus()) {
+                case LIVE, PENDING_REVIEW, REJECTED -> "Resolve open requests before editing or deleting this listing.";
+                default -> "Edit and delete are unavailable while the listing is " + statusLabel(l.getStatus()) + ".";
+            };
+            Label locked = new Label(message);
             locked.setStyle("-fx-text-fill: #8a5a00; -fx-font-size: 11px;");
             locked.setWrapText(true);
             info.getChildren().add(locked);
@@ -316,7 +319,7 @@ public class SellerDashboardController {
         delBtn.setDisable(!mutable);
         delBtn.setOnAction(e -> {
             Alert conf = new Alert(Alert.AlertType.CONFIRMATION,
-                    "Permanently delete '" + l.getTitle() + "'?", ButtonType.CANCEL, ButtonType.OK);
+                    "Remove '" + l.getTitle() + "' from the marketplace?", ButtonType.CANCEL, ButtonType.OK);
             conf.setHeaderText("Delete listing");
             DialogStyle.showAndWait(conf).ifPresent(r -> {
                 if (r == ButtonType.OK) {
