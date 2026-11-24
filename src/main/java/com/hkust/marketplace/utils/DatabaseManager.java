@@ -37,6 +37,16 @@ public class DatabaseManager {
     private static final String URL = "jdbc:sqlite:data.db";
     private static final Path UPLOADS_DIR = Path.of("uploads").toAbsolutePath().normalize();
     private static final Gson JSON = new GsonBuilder().setPrettyPrinting().create();
+    private static final String REFRESH_SELLER_RATING_SQL = """
+            UPDATE users
+            SET (average_rating, rating_count) = (
+                SELECT COALESCE(AVG(r.rating), 0), COUNT(*)
+                FROM reviews r
+                JOIN listings l ON l.listing_id = r.listing_id
+                WHERE (l.seller = users.username OR l.seller_username = users.username)
+                  AND COALESCE(r.hidden, 0) = 0
+            )
+            """;
     private static final String PHOTO_EXTENSION = ".jpg"; // Assuming all photos are JPEGs; adjust as needed
 
     public static Connection connect() throws SQLException {
@@ -206,6 +216,13 @@ public class DatabaseManager {
                     dataset_key TEXT PRIMARY KEY, seeded_at TEXT NOT NULL
                 )
                 """);
+        // Correct the preset totals from the original seed without replaying the dataset.
+        runSql(REFRESH_SELLER_RATING_SQL + """
+                WHERE role = 'SELLER'
+                  AND ((username = 'charlie' AND average_rating = 4.7 AND rating_count = 12)
+                    OR (username = 'diana' AND average_rating = 4.3 AND rating_count = 8))
+                  AND EXISTS (SELECT 1 FROM demo_data_seed WHERE dataset_key = 'marketplace-demo-v1')
+                """);
     }
 
     /** Adds account links, atomic event notifications, and missing links for existing admin queues. */
@@ -293,10 +310,9 @@ public class DatabaseManager {
                         }
                     }
                     if (existing == null) {
-                        insertSeedRow(connection, "users", "username, full_name, password_hash, role, residence_hall, bio, preferred_meetup, created_at, average_rating, rating_count",
+                        insertSeedRow(connection, "users", "username, full_name, password_hash, role, residence_hall, bio, preferred_meetup, created_at",
                                 user.getUsername(), user.getFullName(), user.getPasswordHash(), user.getRole().name(),
-                                user.getResidenceHall(), user.getBio(), user.getPreferredMeetup(), user.getCreatedAt().toString(),
-                                user.getAverageRating(), user.getRatingCount());
+                                user.getResidenceHall(), user.getBio(), user.getPreferredMeetup(), user.getCreatedAt().toString());
                         accounts.put(user.getUsername(), user.getUsername());
                     } else if (user.getRole().name().equals(existing.get("role")) && existing.get("deleted_at") == null
                             && ((Number) existing.get("active")).intValue() == 1) {
@@ -348,6 +364,7 @@ public class DatabaseManager {
                         insertSeedRow(connection, "reviews", "buyer_username, listing_id, rating, text, created_at",
                                 buyer, id, review.getRating(), review.getComment(), review.getCreatedAt().toString());
                     }
+                    refreshSellerRating(connection, accounts.get(review.getSellerUsername()));
                 }
                 java.util.Set<String> pendingRecipients = new java.util.HashSet<>();
                 for (Listing listing : listings) {
@@ -3412,25 +3429,7 @@ public class DatabaseManager {
                         throw new IllegalStateException("This deal has already been rated.");
                     }
                 }
-                try (PreparedStatement ratingUpdate = connection.prepareStatement("""
-                        UPDATE users SET
-                            average_rating = COALESCE((
-                                SELECT AVG(r.rating) FROM reviews r
-                                JOIN listings l ON l.listing_id = r.listing_id
-                                WHERE (l.seller = users.username OR l.seller_username = users.username)
-                                  AND COALESCE(r.hidden, 0) = 0
-                            ), 0),
-                            rating_count = (
-                                SELECT COUNT(*) FROM reviews r
-                                JOIN listings l ON l.listing_id = r.listing_id
-                                WHERE (l.seller = users.username OR l.seller_username = users.username)
-                                  AND COALESCE(r.hidden, 0) = 0
-                            )
-                        WHERE username = ?
-                        """)) {
-                    ratingUpdate.setString(1, seller);
-                    ratingUpdate.executeUpdate();
-                }
+                refreshSellerRating(connection, seller);
                 insertNotification(connection, seller, buyerUsername, "New seller rating",
                         buyerUsername + " rated the deal for " + itemName + " " + rating + " / 5.", "Rating",
                         requestId, listingId);
@@ -3442,6 +3441,13 @@ public class DatabaseManager {
             }
         } catch (SQLException e) {
             throw new IllegalStateException("Could not save the review.", e);
+        }
+    }
+
+    private static void refreshSellerRating(Connection connection, String sellerUsername) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(REFRESH_SELLER_RATING_SQL + "WHERE username = ?")) {
+            statement.setString(1, sellerUsername);
+            statement.executeUpdate();
         }
     }
 

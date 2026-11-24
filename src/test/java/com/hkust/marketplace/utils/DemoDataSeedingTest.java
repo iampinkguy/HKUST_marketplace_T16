@@ -52,11 +52,11 @@ public class DemoDataSeedingTest {
         assertEquals("bob", reviews.get(0).getBuyerUsername());
         assertEquals(5, reviews.get(0).getRating());
         login("charlie", UserRole.SELLER);
-        assertEquals(4.7, SessionManager.getCurrentUser().getAverageRating(), 0.001);
-        assertEquals(12, SessionManager.getCurrentUser().getRatingCount());
+        assertEquals(5.0, SessionManager.getCurrentUser().getAverageRating(), 0.001);
+        assertEquals(1, SessionManager.getCurrentUser().getRatingCount());
         login("diana", UserRole.SELLER);
-        assertEquals(4.3, SessionManager.getCurrentUser().getAverageRating(), 0.001);
-        assertEquals(8, SessionManager.getCurrentUser().getRatingCount());
+        assertEquals(0.0, SessionManager.getCurrentUser().getAverageRating(), 0.001);
+        assertEquals(0, SessionManager.getCurrentUser().getRatingCount());
         login("alice", UserRole.BUYER);
         var deals = DataService.getBuyerDeals();
         assertEquals(1, deals.size());
@@ -65,6 +65,30 @@ public class DemoDataSeedingTest {
         assertNull(deals.get(0).get("completed_at"));
         assertEquals("Offer Accepted", DataService.getNotificationsFor("alice").get(0).getTitle());
     }
+    @Test public void startupRepairsPreviouslySeededTotalsUsingOnlyVisibleReviews() throws Exception {
+        DataService.seedData();
+        try (var connection = DatabaseManager.connect(); var statement = connection.createStatement()) {
+            statement.executeUpdate("UPDATE users SET average_rating = 4.7, rating_count = 12 WHERE username = 'charlie'");
+            statement.executeUpdate("UPDATE users SET average_rating = 4.3, rating_count = 8 WHERE username = 'diana'");
+            statement.executeUpdate("""
+                    INSERT INTO reviews (buyer_username, listing_id, rating, hidden)
+                    SELECT 'alice', listing_id, 1, 1 FROM listings WHERE item_name = 'Old Chemistry Book'
+                    """);
+        }
+        var reviews = DatabaseManager.fetchRows("reviews", Map.of());
+
+        DatabaseManager.initialize();
+        DataService.seedData();
+
+        login("charlie", UserRole.SELLER);
+        assertEquals(5.0, SessionManager.getCurrentUser().getAverageRating(), 0.001);
+        assertEquals(1, SessionManager.getCurrentUser().getRatingCount());
+        login("diana", UserRole.SELLER);
+        assertEquals(0.0, SessionManager.getCurrentUser().getAverageRating(), 0.001);
+        assertEquals(0, SessionManager.getCurrentUser().getRatingCount());
+        assertEquals(reviews, DatabaseManager.fetchRows("reviews", Map.of()));
+    }
+
     private Map<String, Object> snapshot() {
         Map<String, Object> tables = new LinkedHashMap<>();
         for (String table : List.of("users", "listings", "listing_requests", "reviews", "notifications", "feedbacks")) {
