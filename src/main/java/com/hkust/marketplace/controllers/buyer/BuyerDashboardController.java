@@ -626,7 +626,7 @@ public class BuyerDashboardController {
                 LocalDate start = startDate.getValue();
                 LocalDate end = endDate.getValue();
                 long days = ChronoUnit.DAYS.between(start, end);
-                DataService.submitBorrowRequest(listing.getId(), start.atStartOfDay(), end.atStartOfDay());
+                DataService.submitBorrowRequestForDates(listing.getId(), start, end);
                 DataService.sendBuyerListingChatMessage(listing.getId(),
                         "[Formal borrow request] " + start + " to " + end
                                 + " (" + lendingPeriodText((int) days) + ")");
