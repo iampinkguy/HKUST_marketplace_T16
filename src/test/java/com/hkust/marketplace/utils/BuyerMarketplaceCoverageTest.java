@@ -155,6 +155,24 @@ public class BuyerMarketplaceCoverageTest {
     }
 
     @Test
+    public void buyerCanRequestTodayToTomorrowUsingTheTimeOfSubmission() {
+        Listing camera = publish(ListingType.LEND, "Camera", null, 1, "Electronics");
+        loginBuyer();
+        LocalDateTime beforeSubmit = LocalDateTime.now();
+
+        DataService.submitBorrowRequestForDates(
+                camera.getId(), beforeSubmit.toLocalDate(), beforeSubmit.toLocalDate().plusDays(1));
+        LocalDateTime afterSubmit = LocalDateTime.now();
+
+        var request = DataService.getBuyerDeals().get(0);
+        LocalDateTime start = LocalDateTime.parse((String) request.get("borrow_start"));
+        LocalDateTime end = LocalDateTime.parse((String) request.get("borrow_end"));
+        assertFalse("Start should be at or after submission began", start.isBefore(beforeSubmit));
+        assertFalse("Start should be at or before submission ended", start.isAfter(afterSubmit));
+        assertEquals(start.plusDays(1), end);
+    }
+
+    @Test
     public void borrowRequestHonoursTheLendingWindowAndCanBeUpdated() {
         Listing lend = publish(ListingType.LEND, "Graphing Calculator", null, 7, "Electronics");
         Listing sell = publish(ListingType.SELL, "Spare Book", 10.0, null, "Textbooks");

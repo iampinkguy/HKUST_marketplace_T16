@@ -1016,6 +1016,14 @@ public class DataService {
         return favourites;
     }
 
+    public static int submitBorrowRequestForDates(String listingId, LocalDate start, LocalDate end) {
+        if (start == null || end == null) {
+            throw new IllegalArgumentException("Choose a borrow start and end date.");
+        }
+        var submissionTime = LocalDateTime.now().toLocalTime();
+        return submitBorrowRequest(listingId, start.atTime(submissionTime), end.atTime(submissionTime));
+    }
+
     public static int submitBorrowRequest(String listingId, LocalDateTime start, LocalDateTime end) {
         String buyer = requireBuyer();
         int id = parseListingId(listingId);
