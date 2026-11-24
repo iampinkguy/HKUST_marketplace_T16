@@ -1337,7 +1337,21 @@ public class BuyerDashboardController {
             refreshNotificationDot();
         };
         categories.setOnAction(event -> render.run());
-        root.getChildren().addAll(new HBox(8, new Label("Category"), categories), list);
+        Button readAll = new Button("Read All Notifications");
+        readAll.getStyleClass().addAll("btn-outline", "btn-sm");
+        readAll.setOnAction(event -> {
+            try {
+                DataService.markAllCurrentUserNotificationsRead();
+                render.run();
+            } catch (IllegalStateException | SecurityException ex) {
+                alert(Alert.AlertType.ERROR, ex.getMessage());
+            }
+        });
+        Region toolbarSpacer = new Region();
+        HBox.setHgrow(toolbarSpacer, Priority.ALWAYS);
+        HBox toolbar = new HBox(8, new Label("Category"), categories, toolbarSpacer, readAll);
+        toolbar.setAlignment(Pos.CENTER_LEFT);
+        root.getChildren().addAll(toolbar, list);
         render.run();
         contentPane.getChildren().setAll(scroll(root));
     }

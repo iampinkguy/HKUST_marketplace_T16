@@ -2635,6 +2635,23 @@ public class DatabaseManager {
         return notifications;
     }
 
+    public static void markAllNotificationsRead(String username) {
+        if (username == null || username.isBlank()) {
+            throw new IllegalArgumentException("A username is required.");
+        }
+        String sql = """
+                UPDATE notifications SET is_read = 1
+                WHERE username = ? COLLATE NOCASE AND is_read = 0
+                """;
+        try (Connection connection = connect();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, username);
+            statement.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not mark notifications as read", e);
+        }
+    }
+
     public static void markNotificationRead(String username, String notificationId) {
         String sql = """
                 UPDATE notifications SET is_read = 1

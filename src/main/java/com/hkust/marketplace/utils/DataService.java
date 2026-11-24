@@ -1164,6 +1164,11 @@ public class DataService {
         DatabaseManager.markNotificationRead(requireAuthenticatedUser(), notificationId);
     }
 
+    /** Marks every notification for the signed-in buyer, seller, or admin as read. */
+    public static void markAllCurrentUserNotificationsRead() {
+        DatabaseManager.markAllNotificationsRead(requireAuthenticatedUser());
+    }
+
     public static boolean isBuyerDealFinished(Map<String, Object> deal) {
         return deal.get("completed_at") != null || deal.get("returned_at") != null
                 || "DECLINED".equals(deal.get("status"));
@@ -1306,7 +1311,11 @@ public class DataService {
             review.setScore(score);
             review.setHidden(row.get("hidden") instanceof Number number && number.intValue() != 0);
             review.setFlagged(row.get("flagged") instanceof Number number && number.intValue() != 0);
-            if (row.get("created_at") != null) review.setCreatedAt(parseDate(row.get("created_at").toString()));
+            if (row.get("created_at") == null || row.get("created_at").toString().isBlank()) {
+                review.setCreatedAt(null);
+            } else {
+                review.setCreatedAt(parseDate(row.get("created_at").toString()));
+            }
             reviews.add(review);
         }
         return reviews;

@@ -57,6 +57,12 @@ public class SellerNotificationTest {
         assertTrue(notifications.get(0).isRead());
         assertFalse(notifications.get(1).isRead());
         assertTrue(DatabaseManager.fetchNotifications("another-seller").isEmpty());
+
+        DatabaseManager.createNotification("other", "buyer", "Kept", "Still unread", "Offer");
+        DatabaseManager.markAllNotificationsRead("seller");
+        notifications = DatabaseManager.fetchNotifications("seller");
+        assertTrue(notifications.stream().allMatch(Notification::isRead));
+        assertFalse(DatabaseManager.fetchNotifications("other").get(0).isRead());
     }
 
     @Test
