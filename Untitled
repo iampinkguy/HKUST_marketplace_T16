@@ -1,5 +1,0 @@
-target/
-*.class
-data.db
-.idea/
-*.iml

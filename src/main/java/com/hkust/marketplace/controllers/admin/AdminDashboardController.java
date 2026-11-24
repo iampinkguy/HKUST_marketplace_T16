@@ -1257,7 +1257,24 @@ public class AdminDashboardController {
         refresh.setId("admin-notification-refresh");
         refresh.getStyleClass().add("btn-outline");
         refresh.setOnAction(event -> renderAdminNotifications(list));
-        FlowPane filters = new FlowPane(10, 8, new Label("Category:"), categories, new Label("Status:"), state, clear, refresh);
+        Button readAll = new Button("Read All Notifications");
+        readAll.setId("admin-notification-read-all");
+        readAll.getStyleClass().add("btn-outline");
+        readAll.setOnAction(event -> {
+            try {
+                DataService.markAllCurrentUserNotificationsRead();
+                renderAdminNotifications(list);
+                refreshNotificationDot();
+            } catch (IllegalStateException | SecurityException ex) {
+                list.getChildren().removeIf(node -> "admin-notification-error".equals(node.getId()));
+                Label error = new Label("Could not mark notifications as read: " + ex.getMessage());
+                error.setId("admin-notification-error");
+                error.setWrapText(true);
+                error.setStyle("-fx-text-fill: #c62828;");
+                list.getChildren().add(0, error);
+            }
+        });
+        FlowPane filters = new FlowPane(10, 8, new Label("Category:"), categories, new Label("Status:"), state, clear, refresh, readAll);
         filters.setAlignment(Pos.CENTER_LEFT);
         renderAdminNotifications(list);
         ScrollPane scroll = new ScrollPane(list);
