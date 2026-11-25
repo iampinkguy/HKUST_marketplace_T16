@@ -54,18 +54,17 @@ public class AdminLoginController {
             return;
         }
 
-        var account = DatabaseManager.fetchRow("users", "username", username);
-        if (account != null && !"ADMIN".equals(account.get("role"))) {
-            showError("This account is not an admin account. Please use the correct portal.");
-            return;
-        }
-        if (account != null && ((Number) account.get("active")).intValue() == 0) {
-            showError("This account has been deactivated. Contact admin.");
-            return;
-        }
-
         User user;
         try {
+            var account = DatabaseManager.fetchRow("users", "username", username);
+            if (account != null && !"ADMIN".equals(account.get("role"))) {
+                showError("This account is not an admin account. Please use the correct portal.");
+                return;
+            }
+            if (account != null && ((Number) account.get("active")).intValue() == 0) {
+                showError("This account has been deactivated. Contact admin.");
+                return;
+            }
             user = DataService.authenticate(username, password, UserRole.ADMIN);
         } catch (IllegalStateException e) {
             showError("Could not access the database. Please try again.");

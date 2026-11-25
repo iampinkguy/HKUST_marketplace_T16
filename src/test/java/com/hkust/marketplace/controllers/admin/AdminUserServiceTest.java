@@ -83,6 +83,40 @@ public class AdminUserServiceTest {
         assertEquals("DELETE", AdminUserService.getHistory("seller").get(0).action());
         assertEquals("admin", AdminUserService.getHistory("seller").get(0).admin());
     }
+    @Test public void deletingBuyerRetainsAcceptedDealsAndSellerChatHistoryWithoutWithdrawingSellerListings() {
+        String oldChat = System.getProperty("marketplace.chat.history.path");
+        System.setProperty("marketplace.chat.history.path", folder.getRoot().toPath().resolve("buyer-deletion-chat.json").toString());
+        try {
+            String sold = listing("Accepted book"); String live = listing("Still available book");
+            DataService.approveListing(sold, DataService.getListingForAdmin(sold).getReviewVersion());
+            DataService.approveListing(live, DataService.getListingForAdmin(live).getReviewVersion());
+            var admin = SessionManager.getCurrentUser();
+            SessionManager.login(DataService.authenticate("buyer", "OriginalPassword123", UserRole.BUYER));
+            int request = DataService.submitBuyerRequest(sold, "OFFER", 40.0, null);
+            DataService.sendRequestMessage(request, "Keep this agreed price");
+            DataService.sendBuyerListingChatMessage(sold, "Keep this meetup discussion");
+            SessionManager.login(DataService.authenticate("seller", "OriginalPassword123", UserRole.SELLER));
+            DataService.resolveSellerRequest(request, "ACCEPT", null);
+            SessionManager.login(admin); AdminUserService.deleteUser(account("buyer"));
+
+            var deleted = AdminUserService.getAllUsers(true).stream().filter(u -> u.username().equals("buyer")).findFirst().orElseThrow();
+            assertEquals("Deleted user", deleted.fullName()); assertNull(deleted.residenceHall());
+            assertFalse(deleted.active()); assertNotNull(deleted.deletedAt());
+            assertNull(DataService.authenticate("buyer", "OriginalPassword123", UserRole.BUYER));
+            assertThrows(IllegalStateException.class, () -> AdminUserService.setUserActive(deleted, true));
+            var deal = DataService.getAllDeals(null, null, null).stream().filter(d -> d.requestId() == request).findFirst().orElseThrow();
+            assertEquals("buyer", deal.buyerUsername()); assertEquals("seller", deal.sellerUsername());
+            assertEquals("Accepted book", deal.itemTitle());
+            assertEquals(ListingStatus.LIVE, DataService.getListingForAdmin(live).getStatus());
+            assertEquals("DELETE", AdminUserService.getHistory("buyer").get(0).action());
+            SessionManager.login(DataService.authenticate("seller", "OriginalPassword123", UserRole.SELLER));
+            assertEquals("Keep this agreed price", DataService.getRequestMessages(request).get(0).get("content"));
+            assertTrue(DataService.getSellerListingChatBuyers(sold).contains("buyer"));
+            assertEquals("Keep this meetup discussion", DataService.getSellerListingChat(sold, "buyer").getMessages().get(0).getContent());
+        } finally {
+            if (oldChat == null) System.clearProperty("marketplace.chat.history.path"); else System.setProperty("marketplace.chat.history.path", oldChat);
+        }
+    }
     private String listing(String title) {
         return Integer.toString(DatabaseManager.createListing(title, "Others", "Used", "Retained description", 0,
                 null, null, null, null, null, null, "Library", "2026-11-15", "Available", "seller", "SELL", 50.0, null));

@@ -22,13 +22,16 @@ import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.*;
 import javafx.scene.paint.Color;
 import javafx.scene.shape.Circle;
+import javafx.stage.Window;
 import javafx.util.Duration;
 
+import java.io.File;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Function;
 
 public class AdminDashboardController {
 
@@ -39,6 +42,7 @@ public class AdminDashboardController {
     @FXML private Circle notifUnreadDot;
 
     private final ListingDescriptionService descriptionService;
+    private final Function<Window, List<File>> photoPicker;
     private Button currentActiveBtn;
     private String userActionMessage;
     private boolean includeDeletedUsers;
@@ -52,7 +56,18 @@ public class AdminDashboardController {
     }
 
     AdminDashboardController(ListingDescriptionService descriptionService) {
+        this(descriptionService, AdminDashboardController::chooseListingPhotos);
+    }
+
+    AdminDashboardController(ListingDescriptionService descriptionService, Function<Window, List<File>> photoPicker) {
         this.descriptionService = descriptionService;
+        this.photoPicker = photoPicker;
+    }
+
+    private static List<File> chooseListingPhotos(Window owner) {
+        javafx.stage.FileChooser chooser = new javafx.stage.FileChooser(); chooser.setTitle("Choose item photos");
+        chooser.getExtensionFilters().add(new javafx.stage.FileChooser.ExtensionFilter("Image files", "*.jpg", "*.jpeg", "*.png", "*.gif", "*.bmp"));
+        return chooser.showOpenMultipleDialog(owner);
     }
 
     @FXML
@@ -529,9 +544,7 @@ public class AdminDashboardController {
             error.visibleProperty().bind(error.textProperty().isNotEmpty());
             error.managedProperty().bind(error.visibleProperty());
             choose.setOnAction(e -> {
-                javafx.stage.FileChooser chooser = new javafx.stage.FileChooser(); chooser.setTitle("Choose item photos");
-                chooser.getExtensionFilters().add(new javafx.stage.FileChooser.ExtensionFilter("Image files", "*.jpg", "*.jpeg", "*.png", "*.gif", "*.bmp"));
-                List<java.io.File> files = chooser.showOpenMultipleDialog(dialog.getDialogPane().getScene().getWindow());
+                List<File> files = photoPicker.apply(dialog.getDialogPane().getScene().getWindow());
                 if (files == null) return;
                 List<Path> additions = files.stream().map(java.io.File::toPath).distinct().filter(p -> !photos.contains(p)).toList();
                 if (photos.size() + additions.size() > 6) { error.setText("A listing cannot have more than 6 photos."); return; }

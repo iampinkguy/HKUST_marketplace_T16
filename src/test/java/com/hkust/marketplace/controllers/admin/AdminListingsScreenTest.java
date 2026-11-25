@@ -60,6 +60,73 @@ public class AdminListingsScreenTest {
         stage.show();
         button("btnAllListings").fire();
     }
+
+    @Test public void photoChooserRejectsSevenFilesAndSupportsDeduplicationRemovalAndCancellation() throws Exception {
+        var files = new java.util.ArrayList<java.io.File>();
+        for (int i = 1; i <= 7; i++) {
+            var photo = folder.getRoot().toPath().resolve("photo" + i + ".png");
+            javax.imageio.ImageIO.write(new java.awt.image.BufferedImage(3, 3, java.awt.image.BufferedImage.TYPE_INT_RGB), "png", photo.toFile());
+            files.add(photo.toFile());
+        }
+        var selections = new java.util.LinkedList<List<java.io.File>>();
+        selections.add(files); selections.add(files.subList(0, 6)); selections.add(files.subList(0, 2)); selections.add(null);
+        fx(() -> {
+            var loader = new FXMLLoader(getClass().getResource("/fxml/admin/AdminDashboardView.fxml"));
+            loader.setControllerFactory(type -> new AdminDashboardController(new ListingDescriptionService(), owner -> selections.removeFirst()));
+            stage.setScene(new Scene(loader.load())); button("btnAllListings").fire(); button("admin-listing-add").fire();
+            DialogPane form = dialog("Add Listing"); form.applyCss(); form.layout();
+            ((ComboBox<String>) form.lookup("#admin-listing-type")).setValue("Give Away");
+            Button choose = (Button) form.lookup("#admin-listing-photos");
+            choose.fire(); assertTrue(text(form).contains("cannot have more than 6 photos"));
+            assertTrue(text(form).contains("Photos: 0 / 6"));
+            choose.fire(); assertTrue(text(form).contains("Selected photos: 6 / 6"));
+            form.applyCss(); form.layout();
+            assertEquals(6, form.lookupAll(".button").stream().filter(n -> n instanceof Button b && "Remove photo".equals(b.getText())).count());
+            choose.fire(); assertTrue(text(form).contains("Selected photos: 6 / 6"));
+            choose.fire(); assertTrue(text(form).contains("Selected photos: 6 / 6"));
+            form.lookupAll(".button").stream().filter(n -> n instanceof Button b && "Remove photo".equals(b.getText()))
+                    .map(n -> (Button) n).findFirst().orElseThrow().fire();
+            assertTrue(text(form).contains("Selected photos: 5 / 6"));
+            ((Button) form.lookupButton(ButtonType.CANCEL)).fire();
+            assertEquals(1, DataService.getAllListings().size());
+            assertTrue(DataService.getListingForAdmin(listingId).getPhotoPaths().isEmpty());
+            assertTrue(selections.isEmpty()); return null;
+        });
+    }
+    @Test public void selectedPhotoIsCopiedOnlyAfterPublicationIsConfirmed() throws Exception {
+        var source = folder.getRoot().toPath().resolve("selected.png");
+        javax.imageio.ImageIO.write(new java.awt.image.BufferedImage(3, 3, java.awt.image.BufferedImage.TYPE_INT_RGB), "png", source.toFile());
+        var created = new java.util.ArrayList<java.nio.file.Path>();
+        try {
+            fx(() -> {
+                var loader = new FXMLLoader(getClass().getResource("/fxml/admin/AdminDashboardView.fxml"));
+                loader.setControllerFactory(type -> new AdminDashboardController(new ListingDescriptionService(), owner -> List.of(source.toFile())));
+                stage.setScene(new Scene(loader.load())); button("btnAllListings").fire(); button("admin-listing-add").fire();
+                DialogPane form = dialog("Add Listing"); form.applyCss(); form.layout();
+                ((ComboBox<String>) form.lookup("#admin-listing-type")).setValue("Give Away");
+                ((ComboBox<String>) form.lookup("#admin-listing-seller")).setValue("seller");
+                ((TextField) form.lookup("#admin-listing-name")).setText("Item with photo");
+                ((ComboBox<String>) form.lookup("#admin-listing-category")).setValue("Electronics");
+                ((ComboBox<String>) form.lookup("#admin-listing-condition")).setValue("Used");
+                ((TextArea) form.lookup("#admin-listing-description")).setText("Working item");
+                ((ComboBox<String>) form.lookup("#admin-listing-meetup")).setValue("Library");
+                ((Button) form.lookup("#admin-listing-photos")).fire();
+                assertTrue(text(form).contains("Selected photos: 1 / 6"));
+                ((Button) form.lookupButton(ButtonType.OK)).fire();
+                assertEquals(1, DataService.getAllListings().size());
+                ((Button) dialog("Confirm Listing Changes").lookupButton(ButtonType.CANCEL)).fire();
+                assertEquals(1, DataService.getAllListings().size());
+                ((Button) form.lookupButton(ButtonType.OK)).fire();
+                ((Button) dialog("Confirm Listing Changes").lookupButton(ButtonType.OK)).fire(); return null;
+            });
+            awaitClosed("Add Listing");
+            Listing saved = DataService.getAllListings().stream().filter(l -> "Item with photo".equals(l.getTitle())).findFirst().orElseThrow();
+            created.addAll(saved.getPhotoPaths().stream().map(java.nio.file.Path::of).toList());
+            assertEquals(ListingStatus.LIVE, saved.getStatus()); assertEquals(1, created.size());
+            assertArrayEquals(java.nio.file.Files.readAllBytes(source), java.nio.file.Files.readAllBytes(created.get(0)));
+            assertNotEquals(source.toAbsolutePath(), created.get(0).toAbsolutePath());
+        } finally { for (var photo : created) java.nio.file.Files.deleteIfExists(photo); }
+    }
     @After public void close() throws Exception {
         try { fx(() -> { for (Window w : List.copyOf(Window.getWindows())) w.hide(); return null; }); }
         finally {
@@ -262,6 +329,38 @@ public class AdminListingsScreenTest {
             assertTrue(text(node("admin-listings-list")).contains("active admin account is required"));
             return null;
         });
+    }
+    @Test public void photoReplacementIsOptInAndCancelKeepsImagesWhileConfirmedEmptyReplacementClearsThem() throws Exception {
+        var source = folder.getRoot().toPath().resolve("original.png");
+        javax.imageio.ImageIO.write(new java.awt.image.BufferedImage(3, 3, java.awt.image.BufferedImage.TYPE_INT_RGB), "png", source.toFile());
+        Listing listing = DataService.getListingForAdmin(listingId);
+        DataService.updateListingAsAdmin(listing, List.of(source, source), true);
+        List<String> originals = DataService.getListingForAdmin(listingId).getPhotoPaths();
+        try {
+            fx(() -> {
+                button("admin-listings-refresh").fire(); button("admin-listing-edit-" + listingId).fire();
+                DialogPane form = dialog("Edit Listing"); form.applyCss(); form.layout();
+                assertTrue(text(form).contains("Photo 1")); assertTrue(text(form).contains("Photo 2"));
+                CheckBox replace = (CheckBox) form.lookup("#admin-listing-replace-photos");
+                assertFalse(replace.isSelected()); assertTrue(form.lookup("#admin-listing-photos").isDisabled());
+                replace.fire(); assertFalse(form.lookup("#admin-listing-photos").isDisabled());
+                ((Button) form.lookupButton(ButtonType.OK)).fire();
+                ((Button) dialog("Confirm Listing Changes").lookupButton(ButtonType.CANCEL)).fire();
+                assertEquals(originals, DataService.getListingForAdmin(listingId).getPhotoPaths());
+                ((Button) form.lookupButton(ButtonType.CANCEL)).fire();
+                button("admin-listing-edit-" + listingId).fire();
+                form = dialog("Edit Listing"); form.applyCss(); form.layout();
+                assertFalse(((CheckBox) form.lookup("#admin-listing-replace-photos")).isSelected());
+                ((CheckBox) form.lookup("#admin-listing-replace-photos")).fire();
+                ((Button) form.lookupButton(ButtonType.OK)).fire();
+                ((Button) dialog("Confirm Listing Changes").lookupButton(ButtonType.OK)).fire(); return null;
+            });
+            awaitClosed("Edit Listing");
+            assertTrue(DataService.getListingForAdmin(listingId).getPhotoPaths().isEmpty());
+            for (String original : originals) assertFalse(java.nio.file.Files.exists(java.nio.file.Path.of(original)));
+        } finally {
+            for (String original : originals) java.nio.file.Files.deleteIfExists(java.nio.file.Path.of(original));
+        }
     }
 
     @Test public void staleTakedownDialogShowsErrorAndDoesNotSaveDecision() throws Exception {
