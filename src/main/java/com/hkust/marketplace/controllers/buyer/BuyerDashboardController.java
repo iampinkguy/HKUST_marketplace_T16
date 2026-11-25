@@ -501,10 +501,13 @@ public class BuyerDashboardController {
             actionButtons.add(report);
             actions.getChildren().addAll(primary, report);
         }
+        Button checkSeller = new Button("Check Seller");
+        checkSeller.getStyleClass().add("btn-outline");
+        checkSeller.setOnAction(event -> showSellerProfile(listing));
         Button chat = new Button("Chat");
         chat.getStyleClass().add("btn-primary");
         chat.setOnAction(event -> showChatbox(listing, !finishedView && available));
-        actions.getChildren().add(chat);
+        actions.getChildren().addAll(checkSeller, chat);
         if (!available && !ownsDeal) {
             notice.setText("This listing is no longer available. Chat history is kept — open Chat to view the announcement.");
             actionButtons.forEach(button -> button.setDisable(true));
@@ -513,6 +516,66 @@ public class BuyerDashboardController {
         root.getChildren().addAll(header, notice, photos, facts, reviews, actions);
         contentPane.getChildren().setAll(scroll(root));
         watchListing(listing.getId(), mode, notice, actionButtons);
+    }
+
+    private void showSellerProfile(Listing listing) {
+        Map<String, Object> seller;
+        List<Map<String, Object>> sellerReviews;
+        try {
+            seller = DataService.getSellerRating(listing.getSellerUsername());
+            sellerReviews = DataService.getSellerReviews(listing.getSellerUsername());
+        } catch (IllegalStateException | SecurityException ex) {
+            alert(Alert.AlertType.ERROR, ex.getMessage());
+            return;
+        }
+        String name = seller.get("full_name") instanceof String fullName && !fullName.isBlank()
+                ? fullName : text(listing.getSellerFullName());
+        double average = seller.get("average_rating") instanceof Number number ? number.doubleValue() : 0;
+        int count = seller.get("rating_count") instanceof Number number ? number.intValue() : 0;
+        String ratingText = count <= 0
+                ? "No ratings yet"
+                : String.format(Locale.ROOT, "%.1f / 5 (%d rating%s)", average, count, count == 1 ? "" : "s");
+
+        String bio = seller.get("bio") instanceof String value && !value.isBlank()
+                ? value.trim()
+                : "This seller doesn't have a bio.";
+
+        Dialog<Void> dialog = new Dialog<>();
+        dialog.setTitle("Seller Profile - " + name);
+        dialog.setHeaderText(name);
+        VBox body = new VBox(12);
+        body.setPadding(new Insets(4, 4, 8, 4));
+        body.setPrefWidth(460);
+        HBox ratingRow = new HBox(8,
+                com.hkust.marketplace.utils.StarRating.graphic(count <= 0 ? 0 : average),
+                styled(ratingText, "-fx-text-fill: #5a5a7a;"));
+        ratingRow.setAlignment(Pos.CENTER_LEFT);
+        body.getChildren().add(ratingRow);
+        body.getChildren().add(styled("Bio", "-fx-font-weight: bold;"));
+        body.getChildren().add(styled(bio, muted()));
+        body.getChildren().add(styled("Reviews", "-fx-font-weight: bold;"));
+        if (sellerReviews.isEmpty()) {
+            body.getChildren().add(styled("No reviews yet.", muted()));
+        }
+        for (Map<String, Object> review : sellerReviews) {
+            double score = review.get("rating") instanceof Number number ? number.doubleValue() : 0;
+            String reply = review.get("seller_reply") == null ? "" : "\nSeller reply: " + review.get("seller_reply");
+            String comment = textValue(review.get("text"));
+            if (comment.isBlank()) comment = "No written comment.";
+            VBox reviewBlock = new VBox(2,
+                    com.hkust.marketplace.utils.StarRating.graphic(score),
+                    styled(textValue(review.get("item_name")), "-fx-font-weight: bold; -fx-text-fill: #1a1a2e;"),
+                    styled(comment + reply, muted()));
+            body.getChildren().add(reviewBlock);
+        }
+        ScrollPane scroll = new ScrollPane(body);
+        scroll.setFitToWidth(true);
+        scroll.setPrefViewportWidth(480);
+        scroll.setPrefViewportHeight(Math.min(420, 120 + sellerReviews.size() * 72));
+        scroll.setStyle("-fx-background-color: transparent; -fx-background: transparent;");
+        dialog.getDialogPane().setContent(scroll);
+        dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+        DialogStyle.showAndWait(dialog);
     }
 
     private void watchListing(String listingId, DetailMode mode, Label notice, List<Button> actionButtons) {
