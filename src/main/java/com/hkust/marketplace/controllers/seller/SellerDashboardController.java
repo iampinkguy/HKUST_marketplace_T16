@@ -1,5 +1,6 @@
 package com.hkust.marketplace.controllers.seller;
 
+import com.hkust.marketplace.controllers.ListingDescriptionControls;
 import com.hkust.marketplace.models.*;
 import com.hkust.marketplace.utils.DataService;
 import com.hkust.marketplace.utils.DatabaseManager;
@@ -10,9 +11,6 @@ import com.hkust.marketplace.utils.SessionManager;
 import com.hkust.marketplace.utils.StarRating;
 import javafx.animation.KeyFrame;
 import javafx.animation.Timeline;
-import javafx.beans.property.BooleanProperty;
-import javafx.beans.property.SimpleBooleanProperty;
-import javafx.beans.value.ChangeListener;
 import javafx.collections.FXCollections;
 import javafx.concurrent.Task;
 import javafx.fxml.FXML;
@@ -33,7 +31,6 @@ import javafx.scene.paint.Color;
 import javafx.scene.shape.Circle;
 import javafx.stage.FileChooser;
 
-import java.io.IOException;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -45,10 +42,6 @@ import java.util.Locale;
 import java.util.Map;
 
 public class SellerDashboardController {
-    private static final String GENERATE_DESCRIPTION = "Generate Description";
-    private static final String DRAFT_BUTTON_STYLE = "-fx-padding: 1 10;";
-    private static final String LOADING_DRAFT_BUTTON_STYLE = DRAFT_BUTTON_STYLE
-            + " -fx-opacity: 1; -fx-text-fill: #5a5a7a; -fx-border-color: #d0d7e2;";
 
     @FXML private StackPane contentPane;
     @FXML private Label pageTitle;
@@ -470,7 +463,8 @@ public class SellerDashboardController {
 
         Button submitBtn = new Button(editing ? "Save Changes for Review" : "Submit for Review");
         submitBtn.getStyleClass().add("btn-gold");
-        BooleanProperty draftApplied = new SimpleBooleanProperty();
+        var descriptionControls = new ListingDescriptionControls(descriptionService, nameField,
+                catCombo, condCombo, descArea, submitBtn);
         submitBtn.setOnAction(e -> {
             clearInvalidFields(typeCombo, nameField, catCombo, condCombo, descArea, priceField, daysField, meetupCombo);
             boolean valid = true;
@@ -524,7 +518,7 @@ public class SellerDashboardController {
 
             List<Path> photosToSave = List.copyOf(selectedPhotos);
             boolean shouldReplacePhotos = replacePhotos.isSelected();
-            boolean confirmDescription = draftApplied.get();
+            String descriptionConfirmation = descriptionControls.saveConfirmation();
             submitBtn.setDisable(true);
             submitBtn.setText("Saving...");
             Task<Void> saveTask = new Task<>() {
@@ -541,12 +535,12 @@ public class SellerDashboardController {
             saveTask.setOnSucceeded(event -> {
                 if (editing) {
                     DialogStyle.showAndWait(new Alert(Alert.AlertType.INFORMATION,
-                            "Changes saved. Your listing is Pending Review until an admin re-approves it."));
+                            "Changes saved. Your listing is Pending Review until an admin re-approves it."
+                                    + descriptionConfirmation));
                 } else {
-                    String descriptionConfirmation = confirmDescription ? "Your final description was saved.\n" : "";
                     DialogStyle.showAndWait(new Alert(Alert.AlertType.INFORMATION,
-                            "Listing submitted successfully. Status: Pending Review.\n"
-                                    + descriptionConfirmation + "An admin has been notified."));
+                            "Listing submitted successfully. Status: Pending Review.\nAn admin has been notified."
+                                    + descriptionConfirmation));
                 }
                 showMyListings();
             });
@@ -568,14 +562,12 @@ public class SellerDashboardController {
         cancelBtn.getStyleClass().add("btn-outline");
         cancelBtn.setOnAction(e -> showMyListings());
 
-        Region descriptionHeader = editing ? new Label("Description *")
-                : descriptionDraftHeader(nameField, catCombo, condCombo, descArea, submitBtn, draftApplied);
         form.getChildren().addAll(title,
                 new Label("Listing Type *"), typeCombo,
                 new Label("Item Name *"), nameField,
                 new Label("Category *"), catCombo,
                 new Label("Condition *"), condCombo,
-                descriptionHeader, descArea,
+                descriptionControls, descArea,
                 priceGroup, daysGroup,
                 new Label("Meet-up Location *"), meetupCombo,
                 replacePhotos, choosePhotosBtn, photoNote, photoList,
@@ -584,114 +576,6 @@ public class SellerDashboardController {
         ScrollPane scroll = new ScrollPane(form);
         scroll.setFitToWidth(true);
         contentPane.getChildren().add(scroll);
-    }
-
-    private HBox descriptionDraftHeader(TextField name, ComboBox<String> category, ComboBox<String> condition,
-                                       TextArea description, Button submit, BooleanProperty draftApplied) {
-        Label title = new Label("Description *");
-        title.setLabelFor(description);
-        Label feedback = new Label();
-        feedback.setId("listing-draft-feedback");
-        Region spacer = new Region();
-        HBox.setHgrow(spacer, Priority.ALWAYS);
-
-        var length = new ComboBox<>(FXCollections.observableArrayList(ListingDescriptionService.Length.values()));
-        length.setId("listing-draft-length");
-        length.setAccessibleText("Description length");
-        length.setValue(ListingDescriptionService.Length.MEDIUM);
-        length.setPrefSize(120, 28);
-        length.setMinHeight(28);
-        length.setMaxHeight(28);
-        length.setStyle("-fx-padding: 0; -fx-opacity: 1;");
-
-        Button generate = new Button(GENERATE_DESCRIPTION);
-        generate.setId("listing-draft-generate");
-        generate.getStyleClass().add("btn-outline");
-        generate.setPrefSize(159, 28);
-        generate.setMinHeight(28);
-        generate.setMaxHeight(28);
-        generate.setStyle(DRAFT_BUTTON_STYLE);
-        generate.setTooltip(new Tooltip("Uses the item details and any text in the description box."));
-
-        HBox row = new HBox(8, title, feedback, spacer, length, generate) {
-            // Center compact controls in the existing label row, using the form's spacing above and below.
-            @Override protected double computeMinHeight(double width) { return title.minHeight(width); }
-            @Override protected double computePrefHeight(double width) { return title.prefHeight(width); }
-        };
-        row.setAlignment(Pos.CENTER_LEFT);
-
-        BooleanProperty generating = new SimpleBooleanProperty();
-        BooleanProperty inputsChanged = new SimpleBooleanProperty();
-        ChangeListener<String> recordEdit = (observable, before, after) -> inputsChanged.set(true);
-        name.textProperty().addListener(recordEdit);
-        category.valueProperty().addListener(recordEdit);
-        condition.valueProperty().addListener(recordEdit);
-        description.textProperty().addListener((observable, before, after) -> {
-            inputsChanged.set(true);
-            if (!generating.get()) generate.setText(descriptionAction(after));
-        });
-        generate.disableProperty().bind(generating.or(submit.disableProperty()));
-        length.disableProperty().bind(generate.disableProperty());
-        generate.setOnAction(event -> {
-            String itemName = name.getText();
-            String itemCategory = category.getValue();
-            String itemCondition = condition.getValue();
-            if (itemName.isBlank() || itemCategory == null || itemCondition == null) {
-                showDraftFeedback(feedback, "Add item details", "#a32020",
-                        "Enter the item name, category, and condition first.");
-                return;
-            }
-
-            String sellerNotes = description.getText();
-            ListingDescriptionService.Length selectedLength = length.getValue();
-            inputsChanged.set(false);
-            showDraftFeedback(feedback, "", "#5a5a7a", null);
-            generating.set(true);
-            generate.setText(sellerNotes.isBlank() ? "Generating…" : "Polishing…");
-            generate.setStyle(LOADING_DRAFT_BUTTON_STYLE);
-            Task<String> task = new Task<>() {
-                @Override
-                protected String call() throws Exception {
-                    return descriptionService.generate(itemName, itemCategory, itemCondition, sellerNotes, selectedLength);
-                }
-            };
-            task.setOnSucceeded(result -> {
-                generating.set(false);
-                generate.setText(descriptionAction(description.getText()));
-                generate.setStyle(DRAFT_BUTTON_STYLE);
-                if (row.getScene() == null || submit.isDisabled()) return;
-                if (inputsChanged.get()) {
-                    showDraftFeedback(feedback, "Edits kept", "#5a5a7a",
-                            "The listing changed while DeepSeek was working. Try again to use the current details.");
-                    return;
-                }
-                description.setText(task.getValue());
-                draftApplied.set(true);
-                showDraftFeedback(feedback, "Draft ready", "#246b39", null);
-            });
-            task.setOnFailed(result -> {
-                generating.set(false);
-                generate.setText("Try Again");
-                generate.setStyle(DRAFT_BUTTON_STYLE);
-                String detail = task.getException() instanceof IOException failure
-                        ? failure.getMessage() : "Could not generate a description.";
-                showDraftFeedback(feedback, "Generation failed", "#a32020", detail);
-            });
-            Thread worker = new Thread(task, "seller-listing-draft");
-            worker.setDaemon(true);
-            worker.start();
-        });
-        return row;
-    }
-
-    private static String descriptionAction(String text) {
-        return text.isBlank() ? GENERATE_DESCRIPTION : "Polish Description";
-    }
-
-    private static void showDraftFeedback(Label label, String text, String color, String detail) {
-        label.setText(text);
-        label.setStyle("-fx-font-size: 12px; -fx-text-fill: " + color + ";");
-        label.setTooltip(detail == null ? null : new Tooltip(detail));
     }
 
     private void showListingDetails(Listing listing) {

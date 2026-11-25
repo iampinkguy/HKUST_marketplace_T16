@@ -52,7 +52,7 @@ $env:DEEPSEEK_API_KEY = [System.Net.NetworkCredential]::new('', (Read-Host 'Deep
 
 In IntelliJ, set the same variable in your local Maven run configuration. Keep the key out of shared configurations and source control.
 
-In **Seller → Create Listing**, enter the item name, category, and condition and choose **Short**, **Medium**, or **Detailed**. Click **Generate Description** with an empty description, or enter bullet points and click **Polish Description** to send your notes and item details to DeepSeek. Review or edit the result before submitting. Manual descriptions work without a key.
+Description assistance is available in **Seller → Create Listing** and **Edit Listing**, and in **Admin → Manage All Listings** when adding or editing a listing. Enter the item name, category, and condition and choose **Short**, **Medium**, or **Detailed**. Click **Generate Description** with an empty description, or enter bullet points and click **Polish Description** to send your notes and item details to DeepSeek. Review or edit the result before saving. Manual descriptions work without a key.
 
 For usage verification, look for `DeepSeek completion` in the launcher console. The message shows the completion ID, model, and token count reported by DeepSeek.
 

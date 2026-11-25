@@ -5,6 +5,7 @@ import com.google.gson.JsonParser;
 import com.hkust.marketplace.controllers.admin.AdminFxTestSupport;
 import com.hkust.marketplace.models.Listing;
 import com.hkust.marketplace.models.ListingStatus;
+import com.hkust.marketplace.models.ListingType;
 import com.hkust.marketplace.models.User;
 import com.hkust.marketplace.models.UserRole;
 import com.hkust.marketplace.utils.DataService;
@@ -49,6 +50,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -114,6 +116,50 @@ public class SellerListingDescriptionScreenTest {
             if (oldDatabaseUrl == null) System.clearProperty("marketplace.database.url");
             else System.setProperty("marketplace.database.url", oldDatabaseUrl);
         }
+    }
+
+    @Test
+    public void sellerCanPolishAnExistingListingAndSaveTheEditedResultForReview() throws Exception {
+        rejectFirstRequest = false;
+        Listing existing = new Listing();
+        existing.setTitle("Desk lamp");
+        existing.setCategory("Electronics");
+        existing.setCondition("Used");
+        existing.setType(ListingType.GIVEAWAY);
+        existing.setMeetupLocation("Library");
+        existing.setDescription("Used desk lamp with a scratch on the shade.");
+        DataService.submitListing(existing, List.of());
+
+        fx(() -> {
+            ((Button) stage.getScene().lookup("#btnListings")).fire();
+            buttonWithText("Edit").fire();
+            stage.getScene().getRoot().applyCss();
+            stage.getScene().getRoot().layout();
+            assertNotNull("Seller Edit Listing should offer description assistance.", generate());
+            assertEquals("Polish Description", generate().getText());
+            generate().fire();
+            return null;
+        });
+        releaseFirstRequest.countDown();
+
+        awaitUi("polished existing description", () -> "Draft ready".equals(feedback().getText()));
+        String finalDescription = "The used desk lamp has a small scratch on the shade.";
+        fx(() -> {
+            assertEquals("Used desk lamp with a small scratch on the shade.", description().getText());
+            description().setText(finalDescription);
+            buttonWithText("Save Changes for Review").fire();
+            return null;
+        });
+
+        awaitUi("final description confirmation", () -> confirmation() != null);
+        Listing saved = DataService.getSellerListings().get(0);
+        assertEquals(existing.getId(), saved.getId());
+        assertEquals(finalDescription, saved.getDescription());
+        assertEquals(ListingStatus.PENDING_REVIEW, saved.getStatus());
+        fx(() -> {
+            ((Button) confirmation().lookupButton(ButtonType.OK)).fire();
+            return null;
+        });
     }
 
     @Test
@@ -227,6 +273,14 @@ public class SellerListingDescriptionScreenTest {
 
     private TextArea description() {
         return (TextArea) stage.getScene().lookup(".text-area");
+    }
+
+    private Button buttonWithText(String text) {
+        stage.getScene().getRoot().applyCss();
+        stage.getScene().getRoot().layout();
+        return stage.getScene().getRoot().lookupAll(".button").stream()
+                .filter(Button.class::isInstance).map(Button.class::cast)
+                .filter(button -> text.equals(button.getText())).findFirst().orElseThrow();
     }
 
     private Button generate() {

@@ -12,6 +12,8 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Handler;
 import java.util.logging.LogRecord;
@@ -26,6 +28,7 @@ import static org.junit.Assert.assertTrue;
 public class ListingDescriptionServiceTest {
     private final AtomicReference<JsonObject> request = new AtomicReference<>();
     private final AtomicReference<String> authorization = new AtomicReference<>();
+    private final Queue<Reply> nextReplies = new ConcurrentLinkedQueue<>();
     private HttpServer server;
     private ListingDescriptionService service;
     private volatile Reply reply = new Reply(200, """
@@ -44,6 +47,34 @@ public class ListingDescriptionServiceTest {
     @After
     public void stopDeepSeekStub() {
         if (server != null) server.stop(0);
+    }
+
+    @Test
+    public void retriesPolishingWhenOnlyCapitalizationAndPunctuationChanged() throws Exception {
+        String notes = "The lamp is black and works.";
+        nextReplies.add(completion("the lamp is black and works!"));
+        reply = completion("The black lamp is in working order.");
+
+        String polished = service.generate("Desk lamp", "Electronics", "Used", notes,
+                ListingDescriptionService.Length.SHORT);
+
+        assertEquals("The black lamp is in working order.", polished);
+        var messages = request.get().getAsJsonArray("messages");
+        var facts = JsonParser.parseString(messages.get(1).getAsJsonObject().get("content").getAsString());
+        assertEquals(notes, facts.getAsJsonObject().get("sellerNotes").getAsString());
+    }
+
+    @Test
+    public void reportsAnUnchangedPolishAfterOneRetry() {
+        String notes = "The lamp is black and works.";
+        nextReplies.add(completion(notes));
+        nextReplies.add(completion("The lamp is  black and works"));
+        reply = completion("The black lamp is in working order.");
+
+        IOException failure = assertThrows(IOException.class, () -> service.generate("Desk lamp", "Electronics",
+                "Used", notes, ListingDescriptionService.Length.SHORT));
+
+        assertEquals("DeepSeek returned the same wording after a retry.", failure.getMessage());
     }
 
     @Test
@@ -127,12 +158,19 @@ public class ListingDescriptionServiceTest {
             authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
             request.set(JsonParser.parseString(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8))
                     .getAsJsonObject());
-            Reply currentReply = reply;
+            Reply currentReply = nextReplies.poll();
+            if (currentReply == null) currentReply = reply;
             byte[] body = currentReply.body().getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().set("Content-Type", "application/json");
             exchange.sendResponseHeaders(currentReply.status(), body.length);
             exchange.getResponseBody().write(body);
         }
+    }
+
+    private static Reply completion(String text) {
+        return new Reply(200, """
+                {"choices":[{"finish_reason":"stop","message":{"content":"%s"}}]}
+                """.formatted(text));
     }
 
     private record Reply(int status, String body) {}

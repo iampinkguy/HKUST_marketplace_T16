@@ -1,7 +1,10 @@
 package com.hkust.marketplace.controllers.admin;
 
+import com.google.gson.JsonParser;
 import com.hkust.marketplace.models.*;
 import com.hkust.marketplace.utils.*;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
 import javafx.application.Platform;
 import javafx.fxml.FXMLLoader;
 import javafx.scene.*;
@@ -9,7 +12,10 @@ import javafx.scene.control.*;
 import javafx.stage.*;
 import org.junit.*;
 import org.junit.rules.TemporaryFolder;
-import java.nio.file.Path;
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.*;
 import static org.junit.Assert.*;
@@ -38,11 +44,21 @@ public class AdminListingsScreenTest {
         l.setCondition("Used"); l.setMeetupLocation("Library");
         DataService.addListingForSeller("seller", l, List.of()); listingId = l.getId();
         fx(() -> {
-            Parent root = FXMLLoader.load(Path.of("src/main/resources/fxml/admin/AdminDashboardView.fxml").toUri().toURL());
-            stage = new Stage(); stage.setScene(new Scene(root));
-            stage.getScene().getStylesheets().add(Path.of("src/main/resources/css/styles.css").toUri().toString());
-            stage.show(); button("btnAllListings").fire(); return null;
+            stage = new Stage();
+            openListings(null);
+            return null;
         });
+    }
+
+    private void openListings(ListingDescriptionService descriptions) throws IOException {
+        var loader = new FXMLLoader(getClass().getResource("/fxml/admin/AdminDashboardView.fxml"));
+        if (descriptions != null) {
+            loader.setControllerFactory(type -> new AdminDashboardController(descriptions));
+        }
+        stage.setScene(new Scene(loader.load()));
+        stage.getScene().getStylesheets().add(getClass().getResource("/css/styles.css").toExternalForm());
+        stage.show();
+        button("btnAllListings").fire();
     }
     @After public void close() throws Exception {
         try { fx(() -> { for (Window w : List.copyOf(Window.getWindows())) w.hide(); return null; }); }
@@ -69,6 +85,102 @@ public class AdminListingsScreenTest {
         }
         return null;
     }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void adminCanGenerateOnAddAndPolishOnEditBeforeSaving() throws Exception {
+        HttpServer stub = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        stub.createContext("/chat/completions", AdminListingsScreenTest::completeListingDraft);
+        stub.start();
+        try {
+            URI endpoint = URI.create("http://127.0.0.1:" + stub.getAddress().getPort() + "/chat/completions");
+            fx(() -> {
+                openListings(new ListingDescriptionService(endpoint, "test-only-key"));
+                button("admin-listing-add").fire();
+                DialogPane add = dialog("Add Listing");
+                assertNotNull(add);
+                Button draft = (Button) add.lookup("#listing-draft-generate");
+                assertNotNull("Admin Add Listing should offer description assistance.", draft);
+                assertTrue(draft.isDisabled());
+                ((ComboBox<String>) add.lookup("#admin-listing-type")).setValue("Give Away");
+                ((ComboBox<String>) add.lookup("#admin-listing-seller")).setValue("seller");
+                ((TextField) add.lookup("#admin-listing-name")).setText("Spare lamp");
+                ((ComboBox<String>) add.lookup("#admin-listing-category")).setValue("Electronics");
+                ((ComboBox<String>) add.lookup("#admin-listing-condition")).setValue("Used");
+                ((ComboBox<String>) add.lookup("#admin-listing-meetup")).setValue("Library");
+                assertEquals("Generate Description", draft.getText());
+                draft.fire();
+                return null;
+            });
+            awaitDescription("Add Listing", "The spare lamp is in used condition.");
+            confirmListingChanges("Add Listing");
+            awaitClosed("Add Listing");
+            Listing published = DataService.getLiveListings().stream()
+                    .filter(listing -> "Spare lamp".equals(listing.getTitle())).findFirst().orElseThrow();
+            assertEquals("The spare lamp is in used condition.", published.getDescription());
+
+            fx(() -> {
+                button("admin-listing-edit-" + published.getId()).fire();
+                DialogPane edit = dialog("Edit Listing");
+                assertNotNull(edit);
+                Button draft = (Button) edit.lookup("#listing-draft-generate");
+                assertNotNull("Admin Edit Listing should offer description assistance.", draft);
+                assertEquals("Polish Description", draft.getText());
+                draft.fire();
+                return null;
+            });
+            awaitDescription("Edit Listing", "The spare lamp is used.");
+            String finalDescription = "The spare lamp is used and has a blue shade.";
+            fx(() -> {
+                ((TextArea) dialog("Edit Listing").lookup("#admin-listing-description")).setText(finalDescription);
+                return null;
+            });
+            confirmListingChanges("Edit Listing");
+            awaitClosed("Edit Listing");
+            Listing updated = DataService.getListingForAdmin(published.getId());
+            assertEquals(finalDescription, updated.getDescription());
+            assertEquals(ListingStatus.LIVE, updated.getStatus());
+            assertEquals(published.getPostedAt(), updated.getPostedAt());
+            assertTrue(fx(() -> text(stage.getScene().getRoot()).contains("Your final description was saved.")));
+        } finally {
+            stub.stop(0);
+        }
+    }
+
+    private static void completeListingDraft(HttpExchange exchange) throws IOException {
+        try (exchange) {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            var messages = JsonParser.parseString(body).getAsJsonObject().getAsJsonArray("messages");
+            var facts = JsonParser.parseString(messages.get(1).getAsJsonObject().get("content").getAsString());
+            String draft = facts.getAsJsonObject().has("sellerNotes")
+                    ? "The spare lamp is used." : "The spare lamp is in used condition.";
+            byte[] output = """
+                    {"choices":[{"finish_reason":"stop","message":{"content":"%s"}}]}
+                    """.formatted(draft).getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, output.length);
+            exchange.getResponseBody().write(output);
+        }
+    }
+
+    private void awaitDescription(String formTitle, String expected) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (System.nanoTime() < deadline) {
+            if (fx(() -> expected.equals(((TextArea) dialog(formTitle).lookup("#admin-listing-description")).getText()))) return;
+            Thread.sleep(50);
+        }
+        fail("Description did not update in " + formTitle);
+    }
+
+    private void confirmListingChanges(String formTitle) throws Exception {
+        fx(() -> {
+            ((Button) dialog(formTitle).lookupButton(ButtonType.OK)).fire();
+            DialogPane confirmation = dialog("Confirm Listing Changes");
+            assertNotNull(confirmation);
+            ((Button) confirmation.lookupButton(ButtonType.OK)).fire();
+            return null;
+        });
+    }
+
     @Test public void addFormRequiresTypeFirstAndPublishesOnlyAfterConfirmation() throws Exception {
         fx(() -> {
             button("admin-listing-add").fire();

@@ -12,28 +12,37 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.regex.Pattern;
 
 /** Drafts listing descriptions from seller-provided text using DeepSeek. */
 public final class ListingDescriptionService {
     private static final URI ENDPOINT = URI.create("https://api.deepseek.com/chat/completions");
     private static final Gson JSON = new Gson();
     private static final Logger LOG = Logger.getLogger(ListingDescriptionService.class.getName());
+    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(20);
+    private static final Pattern WORD_SEPARATORS = Pattern.compile("[\\p{P}\\s]+", Pattern.UNICODE_CHARACTER_CLASS);
     private static final String GENERATE_INSTRUCTIONS = """
             Write a concise description for a campus marketplace listing using only the supplied item name,
             category, and seller-reported condition.
             """;
     private static final String POLISH_INSTRUCTIONS = """
-            Rewrite the seller's notes as a description for a campus marketplace listing.
+            Rewrite the seller's notes or existing description for a campus marketplace listing.
+            Use fresh phrasing and a different sentence structure, even if the original is already well written.
             Use only the notes and the supplied item name, category, and seller-reported condition.
             Preserve every detail from the seller's notes, including numbers, units, included items, defects,
             caveats, and uncertainty. Combine related points and remove repetition without dropping information.
             Completeness takes priority over the preferred length. Exceed that length whenever needed.
             Before answering, check the description against each point in the notes and restore any missing detail.
+            """;
+    private static final String POLISH_RETRY_INSTRUCTIONS = """
+            The previous attempt repeated the original wording. Change the opening and sentence structure.
+            Use distinct phrasing while preserving every detail and qualification.
             """;
     private static final String SHARED_INSTRUCTIONS = """
             Make the item the subject of the description. Use natural sentences such as "The [item] is ..."
@@ -95,6 +104,21 @@ public final class ListingDescriptionService {
         String actionInstructions = notes == null ? GENERATE_INSTRUCTIONS : POLISH_INSTRUCTIONS;
         String instructions = actionInstructions + SHARED_INSTRUCTIONS.formatted(length.instruction);
         Integer maxTokens = notes == null ? 220 : null;
+        long deadline = System.nanoTime() + REQUEST_TIMEOUT.toNanos();
+        String draft = requestDraft(facts, instructions, maxTokens, deadline);
+        if (notes != null && sameWording(notes, draft)) {
+            draft = requestDraft(facts, instructions + POLISH_RETRY_INSTRUCTIONS, maxTokens, deadline);
+            if (sameWording(notes, draft)) {
+                String detail = "DeepSeek returned the same wording after a retry.";
+                LOG.warning(detail);
+                throw new IOException(detail);
+            }
+        }
+        return draft;
+    }
+
+    private String requestDraft(ListingFacts facts, String instructions, Integer maxTokens, long deadline)
+            throws IOException, InterruptedException {
         var requestBody = new ChatRequest("deepseek-flash", new Thinking("disabled"), maxTokens,
                 List.of(new Message("system", instructions),
                         new Message("user", JSON.toJson(facts))));
@@ -103,9 +127,8 @@ public final class ListingDescriptionService {
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(JSON.toJson(requestBody)))
                 .build();
-        LOG.log(Level.INFO, "Starting DeepSeek request to {0}", endpoint.getHost());
         try {
-            HttpResponse<String> response = send(request);
+            HttpResponse<String> response = send(request, deadline);
             if (response.statusCode() != 200) {
                 throw new IOException("DeepSeek returned HTTP " + response.statusCode() + ".");
             }
@@ -116,10 +139,18 @@ public final class ListingDescriptionService {
         }
     }
 
-    private static HttpResponse<String> send(HttpRequest request) throws IOException, InterruptedException {
+    private static boolean sameWording(String original, String draft) {
+        String originalWords = WORD_SEPARATORS.matcher(original).replaceAll(" ").strip().toLowerCase(Locale.ROOT);
+        String draftWords = WORD_SEPARATORS.matcher(draft).replaceAll(" ").strip().toLowerCase(Locale.ROOT);
+        return originalWords.equals(draftWords);
+    }
+
+    private static HttpResponse<String> send(HttpRequest request, long deadline) throws IOException, InterruptedException {
+        if (deadline - System.nanoTime() <= 0) throw new IOException("DeepSeek took too long to respond.");
+        LOG.log(Level.INFO, "Starting DeepSeek request to {0}", request.uri().getHost());
         var pending = Connection.CLIENT.sendAsync(request, HttpResponse.BodyHandlers.ofString());
         try {
-            return pending.get(20, TimeUnit.SECONDS);
+            return pending.get(deadline - System.nanoTime(), TimeUnit.NANOSECONDS);
         } catch (TimeoutException e) {
             throw new IOException("DeepSeek took too long to respond.", e);
         } catch (ExecutionException e) {
