@@ -5,6 +5,7 @@ import java.time.LocalDateTime;
 public class Notification {
     private String id;
     private String username; // recipient
+    private String sender;
     private String title;
     private String message;
     private String category; // Offer, Chat, System, Rating, etc.
@@ -33,6 +34,9 @@ public class Notification {
 
     public String getUsername() { return username; }
     public void setUsername(String username) { this.username = username; }
+
+    public String getSender() { return sender; }
+    public void setSender(String sender) { this.sender = sender; }
 
     public String getTitle() { return title; }
     public void setTitle(String title) { this.title = title; }

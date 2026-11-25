@@ -10,6 +10,7 @@ import com.hkust.marketplace.models.User;
 import com.hkust.marketplace.utils.DataService;
 import com.hkust.marketplace.utils.DatabaseManager;
 import com.hkust.marketplace.utils.DialogStyle;
+import com.hkust.marketplace.utils.PhotoViewer;
 import com.hkust.marketplace.utils.SceneManager;
 import com.hkust.marketplace.utils.SessionManager;
 import javafx.animation.KeyFrame;
@@ -28,7 +29,9 @@ import javafx.scene.layout.*;
 import javafx.scene.paint.Color;
 import javafx.scene.shape.Circle;
 import javafx.util.Duration;
+import javafx.util.converter.DoubleStringConverter;
 
+import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -185,7 +188,7 @@ public class BuyerDashboardController {
         searchBar.setPadding(new Insets(12, 14, 12, 14));
         searchBar.getStyleClass().add("search-bar");
         TextField searchField = new TextField(keyword == null ? "" : keyword);
-        searchField.setPromptText("Search marketplace by title, description, category, or seller");
+        searchField.setPromptText("Search by title, description, category, type, seller, or meet-up");
         searchField.setMaxWidth(Double.MAX_VALUE);
         HBox.setHgrow(searchField, Priority.ALWAYS);
         searchField.setId("marketplace-search");
@@ -333,14 +336,7 @@ public class BuyerDashboardController {
         card.setMinHeight(220);
         card.setOnMouseClicked(event -> showListingDetail(listing.getId(), DetailMode.MARKET));
 
-        ImageView thumb = new ImageView();
-        thumb.setFitWidth(236);
-        thumb.setFitHeight(120);
-        thumb.setPreserveRatio(true);
-        if (!listing.getPhotoPaths().isEmpty()) {
-            Image image = loadPhoto(listing.getPhotoPaths().get(0), 236, 120);
-            if (image != null) thumb.setImage(image);
-        }
+        javafx.scene.Node thumb = listingThumbnail(listing);
 
         HBox top = new HBox(8);
         top.setAlignment(Pos.CENTER_LEFT);
@@ -419,23 +415,27 @@ public class BuyerDashboardController {
         FlowPane photos = new FlowPane(10, 10);
         photos.setPrefWrapLength(880);
         if (listing.getPhotoPaths().isEmpty()) {
-            photos.getChildren().add(new Label("No photos supplied."));
+            photos.getChildren().add(noPhotoPlaceholder(220, 160));
         } else {
             int shown = Math.min(6, listing.getPhotoPaths().size());
             for (int i = 0; i < shown; i++) {
-                Image image = loadPhoto(listing.getPhotoPaths().get(i), 220, 160);
-                if (image == null) {
+                String path = listing.getPhotoPaths().get(i);
+                Image previewImage = loadPhoto(path, 220, 160);
+                if (previewImage == null) {
                     photos.getChildren().add(new Label("Photo " + (i + 1) + " unavailable."));
                     continue;
                 }
-                ImageView preview = new ImageView(image);
+                ImageView preview = new ImageView(previewImage);
                 preview.setFitWidth(220);
                 preview.setFitHeight(160);
                 preview.setPreserveRatio(true);
                 Button photo = new Button("Photo " + (i + 1), preview);
                 photo.setContentDisplay(ContentDisplay.TOP);
                 int index = i;
-                photo.setOnAction(event -> enlargePhoto(image, index + 1));
+                photo.setOnAction(event -> {
+                    Image full = loadPhoto(path, 0, 0);
+                    enlargePhoto(full != null ? full : previewImage, index + 1);
+                });
                 photos.getChildren().add(photo);
             }
         }
@@ -531,11 +531,19 @@ public class BuyerDashboardController {
                 }
                 if (latest != null && latest.getReviewVersion() != announcedVersion) {
                     announcedVersion = latest.getReviewVersion();
-                    alert(Alert.AlertType.INFORMATION, "Some details of this listing have changed.");
-                    renderListingDetail(latest, mode);
+                    // Defer dialog + re-render off the Timeline pulse so showAndWait is allowed.
+                    Listing changed = latest;
+                    javafx.application.Platform.runLater(() -> {
+                        if (currentPage != Page.DETAIL) return;
+                        alert(Alert.AlertType.INFORMATION, "Some details of this listing have changed.");
+                        renderListingDetail(changed, mode);
+                    });
                 }
             } catch (IllegalStateException | SecurityException ex) {
-                notice.setText(ex.getMessage());
+                if (DialogStyle.isInternalUiError(ex)) return;
+                String message = DialogStyle.userFacing(ex, null);
+                if (message == null || message.isBlank()) return;
+                notice.setText(message);
                 actionButtons.forEach(button -> button.setDisable(true));
             }
         }));
@@ -1584,22 +1592,53 @@ public class BuyerDashboardController {
         dialog.setTitle("Rate seller");
         dialog.setHeaderText("Rate the seller for " + itemName);
         dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
-        Spinner<Double> stars = new Spinner<>(0.0, 5.0, 5.0, 0.5);
+        var values = new SpinnerValueFactory.DoubleSpinnerValueFactory(1.0, 5.0, 5.0, 0.5);
+        values.setConverter(new DoubleStringConverter() {
+            @Override
+            public Double fromString(String text) {
+                try {
+                    return parseRating(text);
+                } catch (IllegalArgumentException ignored) {
+                    // Keep the typed text for validation when the user submits.
+                    return values.getValue();
+                }
+            }
+        });
+        Spinner<Double> stars = new Spinner<>(values);
         stars.setEditable(true);
         TextArea comment = new TextArea();
         comment.setPromptText("Optional short review");
         comment.setPrefRowCount(3);
-        dialog.getDialogPane().setContent(new VBox(8,
-                new Label("Rating from 0.0 to 5.0"), stars, comment));
-        DialogStyle.showAndWait(dialog).ifPresent(response -> {
-            if (response != ButtonType.OK) return;
+        Label ratingLabel = new Label("Rating from 1 to 5");
+        ratingLabel.setLabelFor(stars);
+        Label error = errorLabel("");
+        error.setWrapText(true);
+        dialog.getDialogPane().setContent(new VBox(8, ratingLabel, stars, comment, error));
+
+        Button ok = (Button) dialog.getDialogPane().lookupButton(ButtonType.OK);
+        ok.addEventFilter(ActionEvent.ACTION, event -> {
             try {
-                DataService.rateCompletedDeal(requestId, stars.getValue(), comment.getText());
-                alert(Alert.AlertType.INFORMATION, "Your rating was saved.");
+                double rating = parseRating(stars.getEditor().getText());
+                DataService.rateCompletedDeal(requestId, rating, comment.getText());
+            } catch (NumberFormatException ex) {
+                error.setText("Enter a number from 1 to 5.");
+                event.consume();
             } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
-                alert(Alert.AlertType.ERROR, ex.getMessage());
+                error.setText(ex.getMessage());
+                event.consume();
             }
         });
+        if (DialogStyle.showAndWait(dialog).orElse(ButtonType.CANCEL) == ButtonType.OK) {
+            alert(Alert.AlertType.INFORMATION, "Your rating was saved.");
+        }
+    }
+
+    private static double parseRating(String text) {
+        BigDecimal rating = new BigDecimal(text.trim());
+        if (rating.compareTo(BigDecimal.ONE) < 0 || rating.compareTo(BigDecimal.valueOf(5)) > 0) {
+            throw new IllegalArgumentException("Rating must be between 1 and 5.");
+        }
+        return rating.doubleValue();
     }
 
     private void closeScreen(String message) {
@@ -1610,15 +1649,32 @@ public class BuyerDashboardController {
     }
 
     private void enlargePhoto(Image image, int number) {
-        Dialog<ButtonType> dialog = new Dialog<>();
-        dialog.setTitle("Photo " + number);
-        dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
-        ImageView view = new ImageView(image);
-        view.setPreserveRatio(true);
-        view.setFitWidth(640);
-        view.setFitHeight(480);
-        dialog.getDialogPane().setContent(view);
-        DialogStyle.showAndWait(dialog);
+        PhotoViewer.show(image, "Photo " + number);
+    }
+
+    private javafx.scene.Node listingThumbnail(Listing listing) {
+        if (!listing.getPhotoPaths().isEmpty()) {
+            Image image = loadPhoto(listing.getPhotoPaths().get(0), 236, 120);
+            if (image != null) {
+                ImageView thumb = new ImageView(image);
+                thumb.setFitWidth(236);
+                thumb.setFitHeight(120);
+                thumb.setPreserveRatio(true);
+                return thumb;
+            }
+        }
+        return noPhotoPlaceholder(236, 120);
+    }
+
+    private StackPane noPhotoPlaceholder(double width, double height) {
+        Label label = new Label("No photo available");
+        label.setStyle("-fx-text-fill: #9aa0b0; -fx-font-size: 13px;");
+        StackPane placeholder = new StackPane(label);
+        placeholder.setPrefSize(width, height);
+        placeholder.setMinSize(width, height);
+        placeholder.setMaxWidth(width);
+        placeholder.setStyle("-fx-background-color: #f0f2f7; -fx-background-radius: 6;");
+        return placeholder;
     }
 
     private LocalDate parseDealDate(Map<String, Object> deal) {
@@ -1641,7 +1697,9 @@ public class BuyerDashboardController {
     private Image loadPhoto(String path, double width, double height) {
         try {
             String uri = path.startsWith("file:") ? path : Path.of(path).toAbsolutePath().toUri().toString();
-            Image image = new Image(uri, width, height, true, true, false);
+            Image image = width > 0 && height > 0
+                    ? new Image(uri, width, height, true, true, false)
+                    : new Image(uri, false);
             return image.isError() ? null : image;
         } catch (RuntimeException ex) {
             return null;
@@ -1694,11 +1752,16 @@ public class BuyerDashboardController {
     }
 
     private void alert(Alert.AlertType type, String message) {
-        DialogStyle.showAndWait(new Alert(type, message));
+        String shown = DialogStyle.userFacing(message, type == Alert.AlertType.ERROR
+                ? "Something went wrong. Please try again." : message);
+        if (shown == null || shown.isBlank()) return;
+        DialogStyle.showAndWait(new Alert(type, shown));
     }
 
     private String formatDate(LocalDateTime value) {
-        return value == null ? "Date unavailable" : value.format(DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm"));
+        return value == null
+                ? "Date unavailable"
+                : value.format(DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm", Locale.ENGLISH));
     }
 
     private String formatRange(Object start, Object end) {

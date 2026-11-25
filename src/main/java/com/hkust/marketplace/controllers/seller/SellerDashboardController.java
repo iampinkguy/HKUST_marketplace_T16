@@ -6,6 +6,7 @@ import com.hkust.marketplace.utils.DataService;
 import com.hkust.marketplace.utils.DatabaseManager;
 import com.hkust.marketplace.utils.DialogStyle;
 import com.hkust.marketplace.utils.ListingDescriptionService;
+import com.hkust.marketplace.utils.PhotoViewer;
 import com.hkust.marketplace.utils.SceneManager;
 import com.hkust.marketplace.utils.SessionManager;
 import com.hkust.marketplace.utils.StarRating;
@@ -532,7 +533,7 @@ public class SellerDashboardController {
                     return null;
                 }
             };
-            saveTask.setOnSucceeded(event -> {
+            saveTask.setOnSucceeded(event -> javafx.application.Platform.runLater(() -> {
                 if (editing) {
                     DialogStyle.showAndWait(new Alert(Alert.AlertType.INFORMATION,
                             "Changes saved. Your listing is Pending Review until an admin re-approves it."
@@ -543,16 +544,14 @@ public class SellerDashboardController {
                                     + descriptionConfirmation));
                 }
                 showMyListings();
-            });
-            saveTask.setOnFailed(event -> {
+            }));
+            saveTask.setOnFailed(event -> javafx.application.Platform.runLater(() -> {
                 submitBtn.setDisable(false);
                 submitBtn.setText(editing ? "Save Changes for Review" : "Submit for Review");
                 Throwable error = saveTask.getException();
-                String message = error == null || error.getMessage() == null
-                        ? "An unexpected error occurred."
-                        : error.getMessage();
+                String message = DialogStyle.userFacing(error, "An unexpected error occurred.");
                 DialogStyle.showAndWait(new Alert(Alert.AlertType.ERROR, "Could not save listing: " + message));
-            });
+            }));
             Thread saveThread = new Thread(saveTask, "seller-listing-save");
             saveThread.setDaemon(true);
             saveThread.start();
@@ -641,7 +640,6 @@ public class SellerDashboardController {
         edit.setOnAction(e -> showListingForm(listing));
         Button openChat = new Button("Open Chat Room");
         openChat.getStyleClass().add("btn-primary");
-        openChat.setOnAction(e -> showSellerListingChat(listing, null));
         actions.getChildren().addAll(edit, openChat);
         Map<String, Object> completableDeal = null;
         try {
@@ -673,6 +671,7 @@ public class SellerDashboardController {
         Label requestFeedback = new Label();
         requestFeedback.setWrapText(true);
         requestFeedback.setStyle("-fx-text-fill: #8a5a00;");
+        openChat.setOnAction(e -> showSellerListingChat(listing, null, requests, requestFeedback));
 
         root.getChildren().add(header);
         root.getChildren().add(photos);
@@ -711,7 +710,7 @@ public class SellerDashboardController {
         });
     }
 
-    private void showSellerListingChat(Listing listing, String buyerUsername) {
+    private void showSellerListingChat(Listing listing, String buyerUsername, VBox requests, Label requestFeedback) {
         Dialog<Void> dialog = new Dialog<>();
         dialog.setTitle("Chat room");
         dialog.setHeaderText(buyerUsername == null || buyerUsername.isBlank()
@@ -722,6 +721,7 @@ public class SellerDashboardController {
         chat.setPrefWidth(480);
         dialog.getDialogPane().setContent(chat);
         DialogStyle.showAndWait(dialog);
+        refreshListingRequests(listing, requests, requestFeedback);
     }
 
     private Label fact(String name, String value) {
@@ -953,7 +953,7 @@ public class SellerDashboardController {
                         listing, requestId, "ACCEPT", null, null, requests, feedback));
                 decline.setOnAction(event -> resolveListingRequest(
                         listing, requestId, "DECLINE", null, null, requests, feedback));
-                chat.setOnAction(event -> showSellerListingChat(listing, buyerUsername));
+                chat.setOnAction(event -> showSellerListingChat(listing, buyerUsername, requests, feedback));
                 HBox actions = new HBox(8, accept, decline, chat);
                 card.getChildren().addAll(buyer, summary, actions);
                 requests.getChildren().add(card);
@@ -982,7 +982,7 @@ public class SellerDashboardController {
         FlowPane gallery = new FlowPane(10, 10);
         gallery.setPrefWrapLength(880);
         if (paths.isEmpty()) {
-            gallery.getChildren().add(new Label("No photos supplied."));
+            gallery.getChildren().add(noPhotoPlaceholder(220, 160));
             return gallery;
         }
         int shown = Math.min(6, paths.size());
@@ -991,9 +991,9 @@ public class SellerDashboardController {
             try {
                 String uri = path.startsWith("file:")
                         ? path : Path.of(path).toAbsolutePath().toUri().toString();
-                Image image = new Image(uri, 220, 160, true, true, false);
-                if (image.isError()) throw new IllegalArgumentException("Photo could not be opened.");
-                ImageView preview = new ImageView(image);
+                Image previewImage = new Image(uri, 220, 160, true, true, false);
+                if (previewImage.isError()) throw new IllegalArgumentException("Photo could not be opened.");
+                ImageView preview = new ImageView(previewImage);
                 preview.setPreserveRatio(true);
                 preview.setFitWidth(220);
                 preview.setFitHeight(160);
@@ -1001,15 +1001,8 @@ public class SellerDashboardController {
                 photo.setContentDisplay(ContentDisplay.TOP);
                 int number = index + 1;
                 photo.setOnAction(event -> {
-                    Dialog<ButtonType> fullPhoto = new Dialog<>();
-                    fullPhoto.setTitle("Photo " + number);
-                    fullPhoto.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
-                    ImageView enlargedImage = new ImageView(image);
-                    enlargedImage.setPreserveRatio(true);
-                    enlargedImage.setFitWidth(640);
-                    enlargedImage.setFitHeight(480);
-                    fullPhoto.getDialogPane().setContent(enlargedImage);
-                    DialogStyle.showAndWait(fullPhoto);
+                    Image full = new Image(uri, false);
+                    PhotoViewer.show(full.isError() ? previewImage : full, "Photo " + number);
                 });
                 gallery.getChildren().add(photo);
             } catch (IllegalArgumentException ex) {
@@ -1017,6 +1010,17 @@ public class SellerDashboardController {
             }
         }
         return gallery;
+    }
+
+    private StackPane noPhotoPlaceholder(double width, double height) {
+        Label label = new Label("No photo available");
+        label.setStyle("-fx-text-fill: #9aa0b0; -fx-font-size: 13px;");
+        StackPane placeholder = new StackPane(label);
+        placeholder.setPrefSize(width, height);
+        placeholder.setMinSize(width, height);
+        placeholder.setMaxWidth(width);
+        placeholder.setStyle("-fx-background-color: #f0f2f7; -fx-background-radius: 6;");
+        return placeholder;
     }
 
     private void refreshPhotoSelection(List<Path> selectedPhotos, VBox photoList, Label photoNote, boolean editing) {
@@ -1174,6 +1178,10 @@ public class SellerDashboardController {
 
     @FXML
     private void showReviews() {
+        showReviews(null);
+    }
+
+    private void showReviews(Notification ratingNotification) {
         setActive(btnReviews, "Reviews & Feedback");
         contentPane.getChildren().clear();
 
@@ -1182,7 +1190,7 @@ public class SellerDashboardController {
 
         List<Review> reviews;
         try {
-            reviews = DataService.getReviewsForCurrentSeller();
+            reviews = new ArrayList<>(DataService.getReviewsForCurrentSeller());
         } catch (IllegalStateException | SecurityException ex) {
             root.getChildren().add(new Label("Could not load reviews: " + ex.getMessage()));
             contentPane.getChildren().add(new ScrollPane(root));
@@ -1192,6 +1200,21 @@ public class SellerDashboardController {
         root.getChildren().add(styled(
                 "Select a review to respond or flag it for admin moderation.",
                 "-fx-text-fill: #5a5a7a; -fx-font-size: 13px;"));
+
+        if (ratingNotification != null && ratingNotification.getListingId() != null
+                && ratingNotification.getSender() != null) {
+            String listingId = ratingNotification.getListingId().toString();
+            Review linkedReview = reviews.stream()
+                    .filter(review -> listingId.equals(review.getId())
+                            && ratingNotification.getSender().equalsIgnoreCase(review.getBuyerUsername()))
+                    .findFirst().orElse(null);
+            if (linkedReview == null) {
+                root.getChildren().add(new Label("The review linked to this notification is no longer visible."));
+            } else {
+                reviews.remove(linkedReview);
+                reviews.add(0, linkedReview);
+            }
+        }
 
         if (reviews.isEmpty()) {
             root.getChildren().add(new Label("No reviews yet."));
@@ -1337,7 +1360,8 @@ public class SellerDashboardController {
                 VBox item = new VBox(4);
                 item.getStyleClass().add("notif-item");
                 if (!notification.isRead()) item.setStyle("-fx-border-color: #003974; -fx-border-width: 0 0 0 3;");
-                String listingId = listingIdForNotification(notification, listings);
+                boolean rating = "Rating".equalsIgnoreCase(notification.getCategory());
+                String listingId = rating ? null : listingIdForNotification(notification, listings);
                 HBox footer = new HBox(8);
                 footer.setAlignment(Pos.CENTER_LEFT);
                 Region spacer = new Region();
@@ -1347,12 +1371,14 @@ public class SellerDashboardController {
                 footer.getChildren().add(styled(notification.getCategory() + " · " + when,
                         "-fx-text-fill: #9aa0b0; -fx-font-size: 11px;"));
                 footer.getChildren().add(spacer);
-                if (listingId != null) {
-                    Button go = new Button("Go ->");
+                if (rating || listingId != null) {
+                    Button go = new Button(rating ? "View review" : "Go ->");
                     go.getStyleClass().addAll("btn-outline", "btn-sm");
                     go.addEventFilter(MouseEvent.MOUSE_CLICKED, MouseEvent::consume);
-                    String targetId = listingId;
-                    go.setOnAction(event -> openNotificationListing(user, notification, targetId));
+                    go.setOnAction(event -> {
+                        if (rating) openRatingNotification(user, notification);
+                        else openNotificationListing(user, notification, listingId);
+                    });
                     footer.getChildren().add(go);
                 }
                 item.getChildren().addAll(
@@ -1361,6 +1387,10 @@ public class SellerDashboardController {
                         footer
                 );
                 item.setOnMouseClicked(event -> {
+                    if (rating) {
+                        openRatingNotification(user, notification);
+                        return;
+                    }
                     if (notification.isRead()) return;
                     if (!markNotificationRead(user, notification)) return;
                     item.setStyle(null);
@@ -1393,6 +1423,10 @@ public class SellerDashboardController {
         scroll.setFitToWidth(true);
         scroll.setStyle("-fx-background-color: transparent; -fx-background: transparent;");
         contentPane.getChildren().add(scroll);
+    }
+
+    private void openRatingNotification(User user, Notification notification) {
+        if (markNotificationRead(user, notification)) showReviews(notification);
     }
 
     private void openNotificationListing(User user, Notification notification, String listingId) {
@@ -1534,7 +1568,9 @@ public class SellerDashboardController {
     }
 
     private void showProfileError(String message) {
-        DialogStyle.showAndWait(new Alert(Alert.AlertType.ERROR, message));
+        String shown = DialogStyle.userFacing(message, "Something went wrong. Please try again.");
+        if (shown == null || shown.isBlank()) return;
+        DialogStyle.showAndWait(new Alert(Alert.AlertType.ERROR, shown));
     }
 
     @FXML

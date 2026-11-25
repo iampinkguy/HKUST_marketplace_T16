@@ -221,16 +221,21 @@ public class BuyerMarketplaceCoverageTest {
         DataService.resolveSellerRequest(requestId, "ACCEPT", null);
         Map<String, Object> lent = DatabaseManager.fetchRow("listings", "listing_id", Integer.parseInt(returned.getId()));
         assertEquals("LENT", lent.get("listing_status"));
+        assertEquals("Active loans must not count as completed deals",
+                0, DataService.getSellerActivityStats().get("completed").intValue());
 
         loginBuyer();
         assertFalse(DataService.isBuyerDealFinished(DataService.getBuyerDeals().get(0)));
         DataService.selfReturnBorrow(requestId);
-        Map<String, Object> live = DatabaseManager.fetchRow("listings", "listing_id", Integer.parseInt(returned.getId()));
-        assertEquals("LIVE", live.get("listing_status"));
-        assertEquals("Available", live.get("availability_status"));
+        Map<String, Object> afterReturn = DatabaseManager.fetchRow("listings", "listing_id",
+                Integer.parseInt(returned.getId()));
+        assertEquals("LENT", afterReturn.get("listing_status"));
+        assertEquals("Unavailable", afterReturn.get("availability_status"));
         assertTrue(DataService.isBuyerDealFinished(DataService.getBuyerDeals().get(0)));
         assertTrue(DatabaseManager.fetchNotifications("seller").stream()
                 .anyMatch(note -> "Borrowed item returned".equals(note.getTitle())));
+        assertThrows(IllegalStateException.class,
+                () -> DataService.submitBorrowRequest(returned.getId(), start, start.plusHours(1)));
         DataService.rateCompletedDeal(requestId, 4.5, "Careful borrower.");
         assertEquals(1, DataService.getBuyerReviews().size());
         assertThrows(IllegalStateException.class,
@@ -246,6 +251,10 @@ public class BuyerMarketplaceCoverageTest {
         setDueAt(overdueId, LocalDateTime.now().minusMinutes(1));
         loginBuyer();
         assertEquals(1, DataService.settleExpiredBorrows());
+        Map<String, Object> afterAutoReturn = DatabaseManager.fetchRow("listings", "listing_id",
+                Integer.parseInt(overdue.getId()));
+        assertEquals("LENT", afterAutoReturn.get("listing_status"));
+        assertEquals("Unavailable", afterAutoReturn.get("availability_status"));
         assertTrue(DatabaseManager.fetchNotifications("seller").stream()
                 .anyMatch(note -> "Borrowed item auto-returned".equals(note.getTitle())));
         loginBuyer();
@@ -272,8 +281,10 @@ public class BuyerMarketplaceCoverageTest {
                 .filter(item -> item.getId().equals(gift.getId()))
                 .findFirst().orElseThrow();
         assertEquals("GIVEN", current.getStatus().name());
+        assertEquals("Unfinished giveaways must not count as completed deals",
+                0, DataService.getSellerActivityStats().get("completed").intValue());
         assertTrue(DataService.completeSellerListing(current.getId(), current.getReviewVersion()));
-        assertTrue(DataService.getSellerActivityStats().get("completed") >= 1);
+        assertEquals(1, DataService.getSellerActivityStats().get("completed").intValue());
         assertTrue(DatabaseManager.fetchNotifications("seller").stream().anyMatch(note ->
                 "New chat message".equals(note.getTitle())
                         && Integer.valueOf(Integer.parseInt(gift.getId())).equals(note.getListingId())));
@@ -298,6 +309,28 @@ public class BuyerMarketplaceCoverageTest {
                 () -> DataService.submitBuyerRequest(stillLive.getId(), "UNKNOWN", null, null));
         assertTrue(invalid.getMessage().contains("Invalid request type"));
     }
+
+    @Test
+    public void buyerCanOnlyRateCompletedDealsFromOneToFive() {
+        Listing lamp = publish(ListingType.GIVEAWAY, "Desk Lamp", null, null, "Others");
+        loginBuyer();
+        int requestId = DataService.submitBuyerRequest(lamp.getId(), "CLAIM", null, null);
+        DataService.completeBuyerDeal(requestId);
+        SessionManager.login(seller());
+        Listing claimed = DataService.getSellerListings().get(0);
+        DataService.completeSellerListing(claimed.getId(), claimed.getReviewVersion());
+        loginBuyer();
+
+        for (double score : List.of(-1.0, 0.0, 0.5, 5.5, Double.NaN, Double.POSITIVE_INFINITY)) {
+            assertThrows("Invalid rating " + score, IllegalArgumentException.class,
+                    () -> DataService.rateCompletedDeal(requestId, score, ""));
+        }
+        assertTrue(DataService.getBuyerReviews().isEmpty());
+
+        DataService.rateCompletedDeal(requestId, 1.0, "");
+        assertEquals(1.0, DataService.getBuyerReviews().get(0).getScore(), 0.0);
+    }
+
 
     @Test
     public void buyerCannotBorrowOrClaimTheirOwnListing() throws Exception {

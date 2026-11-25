@@ -5,6 +5,7 @@ import com.hkust.marketplace.models.*;
 import com.hkust.marketplace.utils.DataService;
 import com.hkust.marketplace.utils.DialogStyle;
 import com.hkust.marketplace.utils.ListingDescriptionService;
+import com.hkust.marketplace.utils.PhotoViewer;
 import com.hkust.marketplace.utils.SceneManager;
 import com.hkust.marketplace.utils.SessionManager;
 import javafx.animation.KeyFrame;
@@ -365,13 +366,18 @@ public class AdminDashboardController {
     }
 
     private String formatDate(LocalDateTime date) {
-        return date == null ? "Not set" : date.format(DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm"));
+        return date == null
+                ? "Not set"
+                : date.format(DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm", java.util.Locale.ENGLISH));
     }
 
     private FlowPane createPhotoGallery(List<String> paths, boolean thumbnails) {
         FlowPane gallery = new FlowPane(10, 10);
         gallery.setPrefWrapLength(thumbnails ? 600 : 680);
-        if (paths.isEmpty()) gallery.getChildren().add(new Label("No photos supplied."));
+        if (paths.isEmpty()) {
+            gallery.getChildren().add(noPhotoPlaceholder(thumbnails ? 110 : 300, thumbnails ? 85 : 160));
+            return gallery;
+        }
         for (int index = 0; index < paths.size(); index++) {
             String path = paths.get(index);
             try {
@@ -384,23 +390,25 @@ public class AdminDashboardController {
                 preview.setFitHeight(thumbnails ? 85 : 230);
                 Button photo = new Button("Photo " + (index + 1), preview);
                 photo.setContentDisplay(ContentDisplay.TOP);
-                photo.setOnAction(event -> {
-                    Dialog<ButtonType> fullPhoto = new Dialog<>();
-                    fullPhoto.setTitle("Listing Photo");
-                    fullPhoto.setResizable(true);
-                    ScrollPane scroll = new ScrollPane(new ImageView(image));
-                    scroll.setPrefViewportWidth(720);
-                    scroll.setPrefViewportHeight(500);
-                    fullPhoto.getDialogPane().setContent(scroll);
-                    fullPhoto.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
-                    DialogStyle.showAndWait(fullPhoto);
-                });
+                int number = index + 1;
+                photo.setOnAction(event -> PhotoViewer.show(image, "Photo " + number));
                 gallery.getChildren().add(photo);
             } catch (IllegalArgumentException ex) {
                 gallery.getChildren().add(new Label("Photo " + (index + 1) + " unavailable."));
             }
         }
         return gallery;
+    }
+
+    private StackPane noPhotoPlaceholder(double width, double height) {
+        Label label = new Label("No photo available");
+        label.setStyle("-fx-text-fill: #9aa0b0; -fx-font-size: 13px;");
+        StackPane placeholder = new StackPane(label);
+        placeholder.setPrefSize(width, height);
+        placeholder.setMinSize(width, height);
+        placeholder.setMaxWidth(width);
+        placeholder.setStyle("-fx-background-color: #f0f2f7; -fx-background-radius: 6;");
+        return placeholder;
     }
 
     @FXML
