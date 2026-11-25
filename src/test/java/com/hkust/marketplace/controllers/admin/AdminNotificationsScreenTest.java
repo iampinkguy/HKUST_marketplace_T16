@@ -65,8 +65,14 @@ public class AdminNotificationsScreenTest {
             else System.setProperty("marketplace.database.url", oldUrl);
         }
     }
-    private static <T> T fx(Callable<T> action) throws Exception {
-        FutureTask<T> task = new FutureTask<>(action);
+    private <T> T fx(Callable<T> action) throws Exception {
+        FutureTask<T> task = new FutureTask<>(() -> {
+            if (stage != null && stage.getScene() != null) {
+                stage.getScene().getRoot().applyCss();
+                stage.getScene().getRoot().layout();
+            }
+            return action.call();
+        });
         Platform.runLater(task);
         return task.get(15, TimeUnit.SECONDS);
     }
@@ -239,10 +245,14 @@ public class AdminNotificationsScreenTest {
             return null;
         });
         fx(() -> {
-            assertNotNull("Already handled submissions must show current details", dialog("Listing Details"));
-            assertTrue(text(dialog("Listing Details")).contains("Status: LIVE"));
-            assertEquals(List.of(ButtonType.CLOSE), dialog("Listing Details").getButtonTypes());
-            closeDialog("Listing Details", ButtonType.CLOSE);
+            Node detail = stage.getScene().lookup("#admin-listing-detail");
+            assertNotNull("Already handled submissions must show their current inline details", detail);
+            assertTrue(text(detail).contains("Review this book (#" + listingId + ")"));
+            assertTrue(text(detail).contains("LIVE"));
+            assertNull(button("approve-listing"));
+            assertNull(button("reject-listing"));
+            button("close-listing-detail").fire();
+            assertEquals("Notification Board", ((Label) stage.getScene().lookup("#pageTitle")).getText());
             return null;
         });
     }
@@ -279,6 +289,36 @@ public class AdminNotificationsScreenTest {
             assertNotNull(dialog("Notification"));
             assertTrue(text(dialog("Notification")).contains("other-admin updated account details."));
             closeDialog("Notification", ButtonType.CLOSE);
+            return null;
+        });
+    }
+    @Test public void readAllIncludesFilteredOutNotificationsClearsTheDotAndNewNoticesRestoreIt() throws Exception {
+        DatabaseManager.createNotification("buyer", null, "Private buyer notice", "Only buyer", "System");
+        fx(() -> {
+            Node dot = stage.getScene().lookup("#notifUnreadDot"); assertNotNull(dot); assertTrue(dot.isVisible());
+            ((ComboBox<String>) stage.getScene().lookup("#admin-notification-category")).setValue("Announcement");
+            button("admin-notification-read-all").fire();
+            assertTrue(DataService.getAdminNotifications().stream().allMatch(Notification::isRead));
+            assertFalse(DataService.getNotificationsFor("buyer").get(0).isRead());
+            assertFalse(dot.isVisible());
+            ((ComboBox<String>) stage.getScene().lookup("#admin-notification-state")).setValue("Unread");
+            assertTrue(text(list()).contains("No notifications match"));
+            return null;
+        });
+        DatabaseManager.createNotification("admin", null, "New notice", "Refresh unread indicator", "System");
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(6);
+        boolean visible = false;
+        while (System.nanoTime() < deadline) {
+            if (fx(() -> stage.getScene().lookup("#notifUnreadDot").isVisible())) { visible = true; break; }
+            Thread.sleep(50);
+        }
+        assertTrue("The unread indicator must notice new messages while filters are active", visible);
+        fx(() -> {
+            button("admin-notification-read-all").fire();
+            assertFalse(stage.getScene().lookup("#notifUnreadDot").isVisible());
+            button("btnDeals").fire(); button("btnNotifications").fire();
+            assertTrue(DataService.getAdminNotifications().stream().allMatch(Notification::isRead));
+            assertFalse(stage.getScene().lookup("#notifUnreadDot").isVisible());
             return null;
         });
     }

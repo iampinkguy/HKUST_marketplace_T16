@@ -83,6 +83,26 @@ public class AdminNotificationTest {
         assertThrows(SecurityException.class, DataService::getAdminNotifications);
         assertThrows(SecurityException.class, () -> DataService.markAdminNotificationRead(id));
     }
+    @Test public void readingAllAdminNotificationsPersistsWithoutReadingOtherRecipientsNotices() {
+        DatabaseManager.createNotification("admin", null, "Maintenance", "Notice one", "Announcement");
+        DatabaseManager.createNotification("admin", null, "Reminder", "Notice two", "System");
+        DatabaseManager.createNotification("buyer", null, "Private buyer", "Buyer only", "System");
+        DatabaseManager.createNotification("seller", null, "Private seller", "Seller only", "System");
+        assertTrue(DataService.hasUnreadNotifications());
+        DataService.markAllCurrentUserNotificationsRead();
+        assertFalse(DataService.hasUnreadNotifications());
+        assertEquals(2, DataService.getAdminNotifications().size());
+        assertTrue(DataService.getAdminNotifications().stream().allMatch(Notification::isRead));
+        DataService.markAllCurrentUserNotificationsRead(); DatabaseManager.initialize();
+        assertTrue(DataService.getAdminNotifications().stream().allMatch(Notification::isRead));
+        assertFalse(DataService.getNotificationsFor("buyer").get(0).isRead());
+        assertFalse(DataService.getNotificationsFor("seller").get(0).isRead());
+        SessionManager.logout();
+        assertThrows(SecurityException.class, DataService::markAllCurrentUserNotificationsRead);
+        SessionManager.login(new User("admin", "Admin", "unused", UserRole.ADMIN));
+        DatabaseManager.setUserActive("admin", false);
+        assertThrows(SecurityException.class, DataService::markAllCurrentUserNotificationsRead);
+    }
 
     @Test public void editingAListingCreatesANewLinkedReviewNotification() {
         int id = DatabaseManager.createListing("Book", "Textbooks", "Used", "Clean pages", 0,
