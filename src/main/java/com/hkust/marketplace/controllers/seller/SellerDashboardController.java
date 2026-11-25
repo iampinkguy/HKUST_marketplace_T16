@@ -1,9 +1,11 @@
 package com.hkust.marketplace.controllers.seller;
 
+import com.hkust.marketplace.controllers.ListingDescriptionControls;
 import com.hkust.marketplace.models.*;
 import com.hkust.marketplace.utils.DataService;
 import com.hkust.marketplace.utils.DatabaseManager;
 import com.hkust.marketplace.utils.DialogStyle;
+import com.hkust.marketplace.utils.ListingDescriptionService;
 import com.hkust.marketplace.utils.PhotoViewer;
 import com.hkust.marketplace.utils.SceneManager;
 import com.hkust.marketplace.utils.SessionManager;
@@ -48,6 +50,7 @@ public class SellerDashboardController {
     @FXML private Button btnListings, btnCreate, btnStats, btnReviews, btnNotifications, btnProfile;
     @FXML private Circle notifUnreadDot;
 
+    private final ListingDescriptionService descriptionService;
     private Button currentActiveBtn;
     private String notificationCategory = "All";
     private Timeline notificationTicker;
@@ -56,6 +59,14 @@ public class SellerDashboardController {
     private String listingCategory = "All Categories";
     private String listingType = "All Types";
     private String listingStatus = "All Statuses";
+
+    public SellerDashboardController() {
+        this(new ListingDescriptionService());
+    }
+
+    SellerDashboardController(ListingDescriptionService descriptionService) {
+        this.descriptionService = descriptionService;
+    }
 
     @FXML
     public void initialize() {
@@ -453,6 +464,8 @@ public class SellerDashboardController {
 
         Button submitBtn = new Button(editing ? "Save Changes for Review" : "Submit for Review");
         submitBtn.getStyleClass().add("btn-gold");
+        var descriptionControls = new ListingDescriptionControls(descriptionService, nameField,
+                catCombo, condCombo, descArea, submitBtn);
         submitBtn.setOnAction(e -> {
             clearInvalidFields(typeCombo, nameField, catCombo, condCombo, descArea, priceField, daysField, meetupCombo);
             boolean valid = true;
@@ -506,6 +519,7 @@ public class SellerDashboardController {
 
             List<Path> photosToSave = List.copyOf(selectedPhotos);
             boolean shouldReplacePhotos = replacePhotos.isSelected();
+            String descriptionConfirmation = descriptionControls.saveConfirmation();
             submitBtn.setDisable(true);
             submitBtn.setText("Saving...");
             Task<Void> saveTask = new Task<>() {
@@ -522,10 +536,12 @@ public class SellerDashboardController {
             saveTask.setOnSucceeded(event -> javafx.application.Platform.runLater(() -> {
                 if (editing) {
                     DialogStyle.showAndWait(new Alert(Alert.AlertType.INFORMATION,
-                            "Changes saved. Your listing is Pending Review until an admin re-approves it."));
+                            "Changes saved. Your listing is Pending Review until an admin re-approves it."
+                                    + descriptionConfirmation));
                 } else {
                     DialogStyle.showAndWait(new Alert(Alert.AlertType.INFORMATION,
-                            "Listing submitted successfully. Status: Pending Review.\nAn admin has been notified."));
+                            "Listing submitted successfully. Status: Pending Review.\nAn admin has been notified."
+                                    + descriptionConfirmation));
                 }
                 showMyListings();
             }));
@@ -550,7 +566,7 @@ public class SellerDashboardController {
                 new Label("Item Name *"), nameField,
                 new Label("Category *"), catCombo,
                 new Label("Condition *"), condCombo,
-                new Label("Description *"), descArea,
+                descriptionControls, descArea,
                 priceGroup, daysGroup,
                 new Label("Meet-up Location *"), meetupCombo,
                 replacePhotos, choosePhotosBtn, photoNote, photoList,

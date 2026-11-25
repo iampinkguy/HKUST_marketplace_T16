@@ -41,6 +41,21 @@ mvn clean javafx:run
 2. Open the folder containing `pom.xml`.
 3. Run the wrapper command above in the integrated terminal.
 
+### Enable AI-assisted listing descriptions
+
+Set `DEEPSEEK_API_KEY` in the environment that launches JavaFX. In PowerShell, enter the key at the hidden prompt and launch the app in the same terminal.
+
+```powershell
+$env:DEEPSEEK_API_KEY = [System.Net.NetworkCredential]::new('', (Read-Host 'DeepSeek API key' -AsSecureString)).Password
+.\mvnw.cmd javafx:run
+```
+
+In IntelliJ, set the same variable in your local Maven run configuration. Keep the key out of shared configurations and source control.
+
+Description assistance is available in **Seller → Create Listing** and **Edit Listing**, and in **Admin → Manage All Listings** when adding or editing a listing. Enter the item name, category, and condition and choose **Short**, **Medium**, or **Detailed**. Click **Generate Description** with an empty description, or enter bullet points and click **Polish Description** to send your notes and item details to DeepSeek. Review or edit the result before saving. Manual descriptions work without a key.
+
+For usage verification, look for `DeepSeek completion` in the launcher console. The message shows the completion ID, model, and token count reported by DeepSeek.
+
 ## Demo Credentials
 
 Choose the portal matching the account’s role on the welcome screen.

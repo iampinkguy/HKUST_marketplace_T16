@@ -6,11 +6,11 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.Assert.assertTrue;
 
 /** Shares one toolkit across desktop test classes; the test runner owns the JVM lifetime. */
-final class AdminFxTestSupport {
+public final class AdminFxTestSupport {
     private static boolean started;
     private AdminFxTestSupport() {}
 
-    static synchronized void startToolkit() throws Exception {
+    public static synchronized void startToolkit() throws Exception {
         if (started) return;
         CountDownLatch ready = new CountDownLatch(1);
         Platform.startup(() -> { Platform.setImplicitExit(false); ready.countDown(); });

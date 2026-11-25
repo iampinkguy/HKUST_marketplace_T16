@@ -1,8 +1,10 @@
 package com.hkust.marketplace.controllers.admin;
 
+import com.hkust.marketplace.controllers.ListingDescriptionControls;
 import com.hkust.marketplace.models.*;
 import com.hkust.marketplace.utils.DataService;
 import com.hkust.marketplace.utils.DialogStyle;
+import com.hkust.marketplace.utils.ListingDescriptionService;
 import com.hkust.marketplace.utils.PhotoViewer;
 import com.hkust.marketplace.utils.SceneManager;
 import com.hkust.marketplace.utils.SessionManager;
@@ -36,6 +38,7 @@ public class AdminDashboardController {
     @FXML private Button btnReview, btnAllListings, btnUsers, btnDeals, btnRatings, btnNotifications, btnProfile;
     @FXML private Circle notifUnreadDot;
 
+    private final ListingDescriptionService descriptionService;
     private Button currentActiveBtn;
     private String userActionMessage;
     private boolean includeDeletedUsers;
@@ -43,6 +46,14 @@ public class AdminDashboardController {
     private String notificationState = "All";
     private String listingActionMessage;
     private Timeline notificationTicker;
+
+    public AdminDashboardController() {
+        this(new ListingDescriptionService());
+    }
+
+    AdminDashboardController(ListingDescriptionService descriptionService) {
+        this.descriptionService = descriptionService;
+    }
 
     @FXML
     public void initialize() {
@@ -526,9 +537,10 @@ public class AdminDashboardController {
                 if (photos.size() + additions.size() > 6) { error.setText("A listing cannot have more than 6 photos."); return; }
                 photos.addAll(additions); refreshManagedPhotos(photos, photoList, photoCount);
             });
+            var descriptionControls = new ListingDescriptionControls(descriptionService, name, category, condition, description, save);
             VBox fields = new VBox(8, new Label("Seller username *"), seller, new Label("Item name *"), name,
                     new Label("Category *"), category, new Label("Condition *"), condition,
-                    new Label("Description *"), description, priceGroup, daysGroup, new Label("Meet-up location *"), meetup);
+                    descriptionControls, description, priceGroup, daysGroup, new Label("Meet-up location *"), meetup);
             fields.setId("admin-listing-fields");
             if (editing) {
                 fields.getChildren().add(createPhotoGallery(existing.getPhotoPaths(), false));
@@ -581,14 +593,19 @@ public class AdminDashboardController {
                     }
                 } catch (NumberFormatException ex) { error.setText("Enter a non-negative price for Sell or a positive whole number of days for Lend."); return; }
                 if (editing) { draft.setId(existing.getId()); draft.setReviewVersion(existing.getReviewVersion()); }
+                String descriptionConfirmation = descriptionControls.saveConfirmation();
                 List<Path> selectedPhotos = List.copyOf(photos); boolean replacePhotos = replace.isSelected(); String selectedSeller = seller.getValue();
                 Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
                 confirm.setTitle("Confirm Listing Changes"); confirm.setHeaderText((editing ? "Save changes to " : "Publish ") + draft.getTitle().trim() + "?");
                 confirm.setContentText("Seller: @" + selectedSeller + "\nType: " + type.getValue() + "\nStatus: " + (editing ? existing.getStatus() : "LIVE"));
                 confirm.initOwner(dialog.getDialogPane().getScene().getWindow());
+                save.setDisable(true);
                 confirm.setOnHidden(e -> {
-                    if (confirm.getResult() != ButtonType.OK) return;
-                    save.setDisable(true); fields.setDisable(true); type.setDisable(true);
+                    if (confirm.getResult() != ButtonType.OK) {
+                        save.setDisable(false);
+                        return;
+                    }
+                    fields.setDisable(true); type.setDisable(true);
                     ((Button) dialog.getDialogPane().lookupButton(ButtonType.CANCEL)).setDisable(true);
                     dialog.setOnCloseRequest(close -> close.consume());
                     javafx.concurrent.Task<Void> task = new javafx.concurrent.Task<>() {
@@ -600,7 +617,8 @@ public class AdminDashboardController {
                     };
                     task.setOnSucceeded(done -> {
                         dialog.setOnCloseRequest(null); dialog.close();
-                        listingActionMessage = editing ? "Listing changes saved. Status unchanged." : "Listing published. Seller notified.";
+                        listingActionMessage = (editing ? "Listing changes saved. Status unchanged." : "Listing published. Seller notified.")
+                                + descriptionConfirmation;
                         showAllListings();
                     });
                     task.setOnFailed(done -> {
