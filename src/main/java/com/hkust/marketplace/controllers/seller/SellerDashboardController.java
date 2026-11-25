@@ -4,6 +4,7 @@ import com.hkust.marketplace.models.*;
 import com.hkust.marketplace.utils.DataService;
 import com.hkust.marketplace.utils.DatabaseManager;
 import com.hkust.marketplace.utils.DialogStyle;
+import com.hkust.marketplace.utils.PhotoViewer;
 import com.hkust.marketplace.utils.SceneManager;
 import com.hkust.marketplace.utils.SessionManager;
 import com.hkust.marketplace.utils.StarRating;
@@ -518,7 +519,7 @@ public class SellerDashboardController {
                     return null;
                 }
             };
-            saveTask.setOnSucceeded(event -> {
+            saveTask.setOnSucceeded(event -> javafx.application.Platform.runLater(() -> {
                 if (editing) {
                     DialogStyle.showAndWait(new Alert(Alert.AlertType.INFORMATION,
                             "Changes saved. Your listing is Pending Review until an admin re-approves it."));
@@ -527,16 +528,14 @@ public class SellerDashboardController {
                             "Listing submitted successfully. Status: Pending Review.\nAn admin has been notified."));
                 }
                 showMyListings();
-            });
-            saveTask.setOnFailed(event -> {
+            }));
+            saveTask.setOnFailed(event -> javafx.application.Platform.runLater(() -> {
                 submitBtn.setDisable(false);
                 submitBtn.setText(editing ? "Save Changes for Review" : "Submit for Review");
                 Throwable error = saveTask.getException();
-                String message = error == null || error.getMessage() == null
-                        ? "An unexpected error occurred."
-                        : error.getMessage();
+                String message = DialogStyle.userFacing(error, "An unexpected error occurred.");
                 DialogStyle.showAndWait(new Alert(Alert.AlertType.ERROR, "Could not save listing: " + message));
-            });
+            }));
             Thread saveThread = new Thread(saveTask, "seller-listing-save");
             saveThread.setDaemon(true);
             saveThread.start();
@@ -967,7 +966,7 @@ public class SellerDashboardController {
         FlowPane gallery = new FlowPane(10, 10);
         gallery.setPrefWrapLength(880);
         if (paths.isEmpty()) {
-            gallery.getChildren().add(new Label("No photos supplied."));
+            gallery.getChildren().add(noPhotoPlaceholder(220, 160));
             return gallery;
         }
         int shown = Math.min(6, paths.size());
@@ -976,9 +975,9 @@ public class SellerDashboardController {
             try {
                 String uri = path.startsWith("file:")
                         ? path : Path.of(path).toAbsolutePath().toUri().toString();
-                Image image = new Image(uri, 220, 160, true, true, false);
-                if (image.isError()) throw new IllegalArgumentException("Photo could not be opened.");
-                ImageView preview = new ImageView(image);
+                Image previewImage = new Image(uri, 220, 160, true, true, false);
+                if (previewImage.isError()) throw new IllegalArgumentException("Photo could not be opened.");
+                ImageView preview = new ImageView(previewImage);
                 preview.setPreserveRatio(true);
                 preview.setFitWidth(220);
                 preview.setFitHeight(160);
@@ -986,15 +985,8 @@ public class SellerDashboardController {
                 photo.setContentDisplay(ContentDisplay.TOP);
                 int number = index + 1;
                 photo.setOnAction(event -> {
-                    Dialog<ButtonType> fullPhoto = new Dialog<>();
-                    fullPhoto.setTitle("Photo " + number);
-                    fullPhoto.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
-                    ImageView enlargedImage = new ImageView(image);
-                    enlargedImage.setPreserveRatio(true);
-                    enlargedImage.setFitWidth(640);
-                    enlargedImage.setFitHeight(480);
-                    fullPhoto.getDialogPane().setContent(enlargedImage);
-                    DialogStyle.showAndWait(fullPhoto);
+                    Image full = new Image(uri, false);
+                    PhotoViewer.show(full.isError() ? previewImage : full, "Photo " + number);
                 });
                 gallery.getChildren().add(photo);
             } catch (IllegalArgumentException ex) {
@@ -1002,6 +994,17 @@ public class SellerDashboardController {
             }
         }
         return gallery;
+    }
+
+    private StackPane noPhotoPlaceholder(double width, double height) {
+        Label label = new Label("No photo available");
+        label.setStyle("-fx-text-fill: #9aa0b0; -fx-font-size: 13px;");
+        StackPane placeholder = new StackPane(label);
+        placeholder.setPrefSize(width, height);
+        placeholder.setMinSize(width, height);
+        placeholder.setMaxWidth(width);
+        placeholder.setStyle("-fx-background-color: #f0f2f7; -fx-background-radius: 6;");
+        return placeholder;
     }
 
     private void refreshPhotoSelection(List<Path> selectedPhotos, VBox photoList, Label photoNote, boolean editing) {
@@ -1549,7 +1552,9 @@ public class SellerDashboardController {
     }
 
     private void showProfileError(String message) {
-        DialogStyle.showAndWait(new Alert(Alert.AlertType.ERROR, message));
+        String shown = DialogStyle.userFacing(message, "Something went wrong. Please try again.");
+        if (shown == null || shown.isBlank()) return;
+        DialogStyle.showAndWait(new Alert(Alert.AlertType.ERROR, shown));
     }
 
     @FXML

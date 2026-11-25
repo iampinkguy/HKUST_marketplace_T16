@@ -1484,13 +1484,15 @@ public class DatabaseManager {
                     if (result.next()) stats.put("offers", result.getInt(1));
                 }
             }
+            // Only finished deals count: mutual completion (completed_at) or a returned loan
+            // (returned_at). Active loans (LENT) and claimed-but-unconfirmed giveaways (GIVEN)
+            // must not inflate "Completed deals".
             try (PreparedStatement completed = connection.prepareStatement("""
                     SELECT COUNT(*) FROM listing_requests r
                     JOIN listings l ON l.listing_id = r.listing_id
                     WHERE (l.seller = ? COLLATE NOCASE OR l.seller_username = ? COLLATE NOCASE)
                         AND r.status = 'ACCEPTED'
-                        AND (r.completed_at IS NOT NULL OR r.returned_at IS NOT NULL
-                             OR l.listing_status IN ('SOLD', 'LENT', 'GIVEN'))
+                        AND (r.completed_at IS NOT NULL OR r.returned_at IS NOT NULL)
                     """)) {
                 completed.setString(1, sellerUsername);
                 completed.setString(2, sellerUsername);
@@ -3260,9 +3262,22 @@ public class DatabaseManager {
                         throw new IllegalStateException("This borrowed item cannot be returned.");
                     }
                 }
+                // A lend listing may be lent only once: keep it LENT/Unavailable after return.
+                // If the seller account is gone/inactive, mark REMOVED (same outcome as the
+                // deleted-seller trigger that used to fire when returns republished to LIVE).
                 if (request.get("listing_id") != null && "LENT".equals(request.get("listing_status"))) {
                     try (PreparedStatement update = connection.prepareStatement("""
-                            UPDATE listings SET listing_status = 'LIVE', availability_status = 'Available'
+                            UPDATE listings
+                            SET listing_status = CASE
+                                    WHEN NOT EXISTS (
+                                        SELECT 1 FROM users u
+                                        WHERE u.username = COALESCE(NULLIF(listings.seller, ''),
+                                            listings.seller_username) COLLATE NOCASE
+                                            AND u.active = 1
+                                    ) THEN 'REMOVED'
+                                    ELSE 'LENT'
+                                END,
+                                availability_status = 'Unavailable'
                             WHERE listing_id = ? AND listing_status = 'LENT'
                             """)) {
                         update.setInt(1, ((Number) request.get("listing_id")).intValue());

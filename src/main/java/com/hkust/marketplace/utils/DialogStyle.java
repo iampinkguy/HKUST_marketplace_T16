@@ -1,5 +1,6 @@
 package com.hkust.marketplace.utils;
 
+import javafx.application.Platform;
 import javafx.event.EventHandler;
 import javafx.scene.Node;
 import javafx.scene.control.Alert;
@@ -12,7 +13,9 @@ import javafx.scene.control.DialogPane;
 import javafx.stage.Window;
 
 import java.net.URL;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Applies the shared HKUST Marketplace stylesheet and button look to pop-up dialogs.
@@ -22,6 +25,7 @@ public final class DialogStyle {
     private static final String STYLE_MARKER = "app-dialog";
     private static final Object HANDLER_KEY = new Object();
     private static final String STYLESHEET;
+    private static final String DEFAULT_RETRY = "Something went wrong. Please try again.";
 
     static {
         URL css = DialogStyle.class.getResource("/css/styles.css");
@@ -60,7 +64,23 @@ public final class DialogStyle {
 
     public static <R> Optional<R> showAndWait(Dialog<R> dialog) {
         apply(dialog);
-        return dialog.showAndWait();
+        try {
+            return dialog.showAndWait();
+        } catch (IllegalStateException ex) {
+            if (!isInternalUiError(ex)) throw ex;
+            // showAndWait cannot run during a Timeline/layout pulse — defer one frame.
+            AtomicReference<Optional<R>> result = new AtomicReference<>(Optional.empty());
+            Object nestKey = new Object();
+            Platform.runLater(() -> {
+                try {
+                    result.set(dialog.showAndWait());
+                } finally {
+                    Platform.exitNestedEventLoop(nestKey, null);
+                }
+            });
+            Platform.enterNestedEventLoop(nestKey);
+            return result.get();
+        }
     }
 
     public static void show(Dialog<?> dialog) {
@@ -79,6 +99,39 @@ public final class DialogStyle {
         alert.setHeaderText(header);
         alert.setContentText(message == null ? "" : message);
         return showAndWait(alert);
+    }
+
+    /** True for JavaFX pulse/layout dialog errors that should never be shown to users. */
+    public static boolean isInternalUiError(Throwable error) {
+        if (error == null) return false;
+        String message = error.getMessage();
+        if (message == null || message.isBlank()) return false;
+        String lower = message.toLowerCase(Locale.ROOT);
+        return lower.contains("showandwait is not allowed")
+                || lower.contains("animation or layout processing")
+                || lower.contains("not on fx application thread");
+    }
+
+    /**
+     * Keeps useful business errors; replaces misleading JavaFX internals with a short fallback.
+     * Pass {@code null} fallback to hide the message entirely when it is internal-only.
+     */
+    public static String userFacing(Throwable error, String fallback) {
+        if (error == null) return fallback == null ? DEFAULT_RETRY : fallback;
+        return userFacing(error.getMessage(), fallback);
+    }
+
+    public static String userFacing(String message, String fallback) {
+        if (message == null || message.isBlank()) {
+            return fallback == null ? DEFAULT_RETRY : fallback;
+        }
+        String lower = message.toLowerCase(Locale.ROOT);
+        if (lower.contains("showandwait is not allowed")
+                || lower.contains("animation or layout processing")
+                || lower.contains("not on fx application thread")) {
+            return fallback;
+        }
+        return message;
     }
 
     private static void ensureShowingHandler(Dialog<?> dialog) {

@@ -925,7 +925,7 @@ public class DataService {
                                                        String sort) {
         String buyer = requireBuyer();
         List<Integer> hidden = DatabaseManager.fetchReportedListingIds(buyer);
-        String needle = keyword == null ? "" : keyword.trim().toLowerCase(Locale.ROOT);
+        String[] tokens = tokenizeSearch(keyword);
         List<Listing> matches = new ArrayList<>();
         for (Listing listing : getLiveListings()) {
             if (hidden.contains(Integer.parseInt(listing.getId()))) continue;
@@ -941,13 +941,7 @@ public class DataService {
                 if (minPrice != null && listing.getPrice() < minPrice) continue;
                 if (maxPrice != null && listing.getPrice() > maxPrice) continue;
             }
-            if (!needle.isEmpty()) {
-                String haystack = String.join(" ",
-                        text(listing.getTitle()), text(listing.getDescription()), text(listing.getCategory()),
-                        text(listing.getSellerFullName()), text(listing.getMeetupLocation()),
-                        text(listing.getCondition())).toLowerCase(Locale.ROOT);
-                if (!haystack.contains(needle)) continue;
-            }
+            if (tokens.length > 0 && !matchesAllSearchTokens(listing, tokens)) continue;
             matches.add(listing);
         }
         Comparator<Listing> comparator = switch (sort == null ? "Newest" : sort) {
@@ -958,8 +952,72 @@ public class DataService {
             default -> Comparator.comparing(Listing::getPostedAt,
                     Comparator.nullsLast(Comparator.reverseOrder()));
         };
-        matches.sort(comparator.thenComparing(Listing::getId));
+        if (tokens.length > 0) {
+            matches.sort(Comparator
+                    .comparingInt((Listing listing) -> searchRelevance(listing, tokens)).reversed()
+                    .thenComparing(comparator)
+                    .thenComparing(Listing::getId));
+        } else {
+            matches.sort(comparator.thenComparing(Listing::getId));
+        }
         return matches;
+    }
+
+    /** Splits a marketplace query into lowercase tokens; blank queries yield no tokens. */
+    private static String[] tokenizeSearch(String keyword) {
+        if (keyword == null || keyword.isBlank()) return new String[0];
+        return keyword.trim().toLowerCase(Locale.ROOT).split("\\s+");
+    }
+
+    /**
+     * Every token must hit at least one searchable field (AND across tokens).
+     * Fields are checked individually so matches do not leak across field boundaries.
+     */
+    private static boolean matchesAllSearchTokens(Listing listing, String[] tokens) {
+        String[] fields = searchableFields(listing);
+        for (String token : tokens) {
+            boolean hit = false;
+            for (String field : fields) {
+                if (field.contains(token)) {
+                    hit = true;
+                    break;
+                }
+            }
+            if (!hit) return false;
+        }
+        return true;
+    }
+
+    /** Higher score = better match (title hits weigh more than description/seller). */
+    private static int searchRelevance(Listing listing, String[] tokens) {
+        String title = text(listing.getTitle()).toLowerCase(Locale.ROOT);
+        String description = text(listing.getDescription()).toLowerCase(Locale.ROOT);
+        String seller = (text(listing.getSellerFullName()) + " " + text(listing.getSellerUsername()))
+                .toLowerCase(Locale.ROOT);
+        int score = 0;
+        for (String token : tokens) {
+            if (title.contains(token)) score += 8;
+            if (description.contains(token)) score += 2;
+            if (seller.contains(token)) score += 3;
+            if (text(listing.getCategory()).toLowerCase(Locale.ROOT).contains(token)) score += 2;
+            if (text(listing.getMeetupLocation()).toLowerCase(Locale.ROOT).contains(token)) score += 1;
+        }
+        return score;
+    }
+
+    private static String[] searchableFields(Listing listing) {
+        return new String[]{
+                text(listing.getTitle()).toLowerCase(Locale.ROOT),
+                text(listing.getDescription()).toLowerCase(Locale.ROOT),
+                text(listing.getCategory()).toLowerCase(Locale.ROOT),
+                text(listing.getSellerFullName()).toLowerCase(Locale.ROOT),
+                text(listing.getSellerUsername()).toLowerCase(Locale.ROOT),
+                text(listing.getMeetupLocation()).toLowerCase(Locale.ROOT),
+                text(listing.getCondition()).toLowerCase(Locale.ROOT),
+                listing.getType() == null ? "" : listing.getTypeDisplay().toLowerCase(Locale.ROOT),
+                listing.getType() == null ? "" : listing.getType().name().toLowerCase(Locale.ROOT),
+                text(listing.getAvailabilityStatus()).toLowerCase(Locale.ROOT)
+        };
     }
 
     /** Opens a listing detail and counts one view. Reported listings stay hidden. */

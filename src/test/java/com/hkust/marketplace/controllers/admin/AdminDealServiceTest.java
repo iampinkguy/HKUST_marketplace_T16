@@ -158,7 +158,7 @@ public class AdminDealServiceTest {
         assertEquals(ListingType.LEND, records.get(0).dealType());
     }
 
-    @Test public void returnedLoanStaysInDealHistoryWhenAnotherBuyerRequestsTheSameListing() {
+    @Test public void returnedLoanDisablesListingAndStaysInDealHistory() {
         var admin = SessionManager.getCurrentUser();
         var seller = DataService.authenticate("seller", "Password123", UserRole.SELLER);
         var firstBuyer = DataService.authenticate("buyer", "Password123", UserRole.BUYER);
@@ -190,36 +190,30 @@ public class AdminDealServiceTest {
         DataService.selfReturnBorrow(returnedRequest);
 
         SessionManager.login(seller);
-        assertTrue("A returned loan should not lock a live listing",
+        var afterReturn = DataService.getSellerListings().stream()
+                .filter(listing -> listingId.equals(listing.getId()))
+                .findFirst().orElseThrow();
+        assertEquals(ListingStatus.LENT, afterReturn.getStatus());
+        assertEquals("Unavailable", afterReturn.getAvailabilityStatus());
+        assertFalse("A one-time lend listing stays disabled after return",
                 DataService.canSellerModifyListing(listingId));
+        assertEquals(Integer.valueOf(1), DataService.getSellerActivityStats().get("completed"));
 
         SessionManager.login(admin);
         assertEquals(List.of(returnedRequest), ids(null, ListingType.LEND, "Returned"));
 
         SessionManager.login(secondBuyer);
         var secondStart = LocalDateTime.now().plusMinutes(1);
-        int pendingRequest = DataService.submitBorrowRequest(listingId, secondStart, secondStart.plusHours(1));
-
-        SessionManager.login(admin);
-        assertEquals("The returned loan should remain in admin history after a new request",
-                List.of(returnedRequest), ids(null, ListingType.LEND, "Returned"));
+        assertThrows(IllegalStateException.class,
+                () -> DataService.submitBorrowRequest(listingId, secondStart, secondStart.plusHours(1)));
 
         SessionManager.login(firstBuyer);
         var buyerDeal = DataService.getBuyerDeals().get(0);
         assertEquals("ACCEPTED", buyerDeal.get("status"));
         assertNotNull(buyerDeal.get("returned_at"));
 
-        SessionManager.login(seller);
-        assertEquals(Integer.valueOf(1), DataService.getSellerActivityStats().get("completed"));
-        assertFalse("The new pending request should still lock the listing",
-                DataService.canSellerModifyListing(listingId));
-        DataService.resolveSellerRequest(pendingRequest, "DECLINE", null);
-        var liveCamera = DataService.getSellerListings().get(0);
-        DataService.deleteSellerListing(listingId, liveCamera.getReviewVersion());
-        assertTrue(DataService.getLiveListings().isEmpty());
-
         SessionManager.login(admin);
-        assertEquals("Deleting the listing should preserve the returned loan",
+        assertEquals("The returned loan should remain in admin history after the listing is disabled",
                 List.of(returnedRequest), ids(null, ListingType.LEND, "Returned"));
     }
 
