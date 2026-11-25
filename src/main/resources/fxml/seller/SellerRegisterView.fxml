@@ -9,9 +9,9 @@
            fx:controller="com.hkust.marketplace.controllers.seller.SellerRegisterController"
            styleClass="welcome-bg" prefWidth="1200" prefHeight="780">
 
-    <ScrollPane fitToWidth="true" style="-fx-background-color: transparent;">
-        <VBox alignment="CENTER" spacing="0" maxWidth="460" style="-fx-padding: 30 0;">
-            <VBox alignment="CENTER" spacing="14" styleClass="auth-pane">
+    <ScrollPane fitToWidth="true" fitToHeight="true" style="-fx-background-color: transparent;">
+        <StackPane minHeight="-Infinity" style="-fx-padding: 16 20;">
+            <VBox alignment="CENTER" spacing="10" maxWidth="460" maxHeight="-Infinity" styleClass="auth-pane">
                 <HBox alignment="CENTER" spacing="12">
                     <ImageView fitHeight="46" fitWidth="30" preserveRatio="true">
                         <image>
@@ -78,6 +78,6 @@
                 </HBox>
                 <Hyperlink text="← Back to Welcome" onAction="#goWelcome"/>
             </VBox>
-        </VBox>
+        </StackPane>
     </ScrollPane>
 </StackPane>

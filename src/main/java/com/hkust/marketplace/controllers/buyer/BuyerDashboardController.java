@@ -49,7 +49,7 @@ import java.util.regex.Pattern;
 
 public class BuyerDashboardController {
 
-    private enum Page { BROWSE, DETAIL, DEALS, HISTORY, FAVOURITES, NOTIFICATIONS, PROFILE, CLOSED }
+    private enum Page { BROWSE, DETAIL, DEALS, HISTORY, FAVOURITES, NOTIFICATIONS, PROFILE }
 
     private enum DetailMode { MARKET, DEAL, FINISHED, HISTORY, NOTICE, NOTICE_FINISHED }
 
@@ -64,13 +64,18 @@ public class BuyerDashboardController {
     private Timeline returnTicker;
     private Timeline detailTicker;
 
+    private static final String ALL_CATEGORIES = "All Categories";
+    private static final String ALL_TYPES = "All Types";
+    private static final String ALL_CONDITIONS = "All Conditions";
+    private static final String DEFAULT_SORT = "Newest";
+
     private String keyword = "";
-    private String category = "All Categories";
-    private String listingType = "All Types";
-    private String condition = "All Conditions";
+    private String category = ALL_CATEGORIES;
+    private String listingType = ALL_TYPES;
+    private String condition = ALL_CONDITIONS;
     private Double minPrice;
     private Double maxPrice;
-    private String sort = "Newest";
+    private String sort = DEFAULT_SORT;
 
     private String dealKeyword = "";
     private String dealCategory = "All Categories";
@@ -203,11 +208,11 @@ public class BuyerDashboardController {
         filterBtn.getStyleClass().addAll("btn-outline", "btn-sm");
         Button sortBtn = new Button("Sort");
         sortBtn.getStyleClass().addAll("btn-outline", "btn-sm");
-        Button closeBtn = new Button("X");
-        closeBtn.getStyleClass().addAll("btn-outline", "btn-sm");
+        Button resetBtn = new Button("Clear filters and sort");
+        resetBtn.getStyleClass().addAll("btn-outline", "btn-sm");
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
-        tools.getChildren().addAll(filterBtn, sortBtn, spacer, closeBtn);
+        tools.getChildren().addAll(filterBtn, sortBtn, spacer, resetBtn);
 
         Label summary = new Label(filterSummary());
         summary.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 12px;");
@@ -217,6 +222,9 @@ public class BuyerDashboardController {
         Runnable refreshResults = () -> {
             keyword = searchField.getText() == null ? "" : searchField.getText().trim();
             clearBtn.setDisable(keyword.isBlank());
+            resetBtn.setDisable(ALL_CATEGORIES.equals(category) && ALL_TYPES.equals(listingType)
+                    && ALL_CONDITIONS.equals(condition) && minPrice == null && maxPrice == null
+                    && DEFAULT_SORT.equals(sort));
             summary.setText(filterSummary());
             resultsBox.getChildren().clear();
 
@@ -259,7 +267,16 @@ public class BuyerDashboardController {
         clearBtn.setOnAction(event -> searchField.clear());
         filterBtn.setOnAction(event -> openMarketplaceFilter());
         sortBtn.setOnAction(event -> openMarketplaceSort());
-        closeBtn.setOnAction(event -> closeScreen("Marketplace closed."));
+        resetBtn.setOnAction(event -> {
+            searchDebounce.stop();
+            category = ALL_CATEGORIES;
+            listingType = ALL_TYPES;
+            condition = ALL_CONDITIONS;
+            minPrice = null;
+            maxPrice = null;
+            sort = DEFAULT_SORT;
+            refreshResults.run();
+        });
 
         refreshResults.run();
         root.getChildren().addAll(searchBar, tools, summary, resultsBox);
@@ -281,9 +298,9 @@ public class BuyerDashboardController {
         dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
         ((Button) dialog.getDialogPane().lookupButton(ButtonType.OK)).setText("Apply");
 
-        ComboBox<String> categories = combo(DataService.CATEGORIES, "All Categories", category);
-        ComboBox<String> types = combo(List.of("Sell", "Lend", "Giveaway"), "All Types", listingType);
-        ComboBox<String> conditions = combo(DataService.CONDITIONS, "All Conditions", condition);
+        ComboBox<String> categories = combo(DataService.CATEGORIES, ALL_CATEGORIES, category);
+        ComboBox<String> types = combo(List.of("Sell", "Lend", "Giveaway"), ALL_TYPES, listingType);
+        ComboBox<String> conditions = combo(DataService.CONDITIONS, ALL_CONDITIONS, condition);
         TextField min = new TextField(minPrice == null ? "" : trimPrice(minPrice));
         min.setPromptText("Min price");
         TextField max = new TextField(maxPrice == null ? "" : trimPrice(maxPrice));
@@ -318,7 +335,7 @@ public class BuyerDashboardController {
         dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
         ((Button) dialog.getDialogPane().lookupButton(ButtonType.OK)).setText("Sort");
         ComboBox<String> sorter = new ComboBox<>(FXCollections.observableArrayList(
-                "Newest", "Price: Low to High", "Price: High to Low"));
+                DEFAULT_SORT, "Price: Low to High", "Price: High to Low"));
         sorter.setValue(sort);
         dialog.getDialogPane().setContent(sorter);
         DialogStyle.showAndWait(dialog).ifPresent(response -> {
@@ -1702,13 +1719,6 @@ public class BuyerDashboardController {
             throw new IllegalArgumentException("Rating must be between 1 and 5.");
         }
         return rating.doubleValue();
-    }
-
-    private void closeScreen(String message) {
-        stopDetailWatch();
-        currentPage = Page.CLOSED;
-        pageTitle.setText("Closed");
-        contentPane.getChildren().setAll(styled(message + " Choose a section from the menu.", muted()));
     }
 
     private void enlargePhoto(Image image, int number) {
