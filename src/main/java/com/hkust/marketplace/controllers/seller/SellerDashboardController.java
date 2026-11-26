@@ -97,9 +97,9 @@ public class SellerDashboardController {
         notifUnreadDot.setStrokeWidth(1.5);
         notifUnreadDot.setMouseTransparent(true);
         notifUnreadDot.setVisible(false);
-        StackPane.setAlignment(notifUnreadDot, Pos.TOP_RIGHT);
+        StackPane.setAlignment(notifUnreadDot, Pos.CENTER_RIGHT);
         notifUnreadDot.setTranslateX(-14);
-        notifUnreadDot.setTranslateY(10);
+        notifUnreadDot.setTranslateY(0);
         host.getChildren().add(notifUnreadDot);
     }
 
@@ -423,6 +423,7 @@ public class SellerDashboardController {
         VBox photoList = new VBox(6);
         Button choosePhotosBtn = new Button("Choose Photos (up to 6)");
         choosePhotosBtn.getStyleClass().add("btn-outline");
+        choosePhotosBtn.setMaxWidth(Region.USE_PREF_SIZE);
         Label photoNote = new Label(editing
                 ? "Current photos: " + existing.getPhotoPaths().size() + ". Leave replacement unchecked to keep them."
                 : "Photos: 0 / 6");
@@ -469,6 +470,7 @@ public class SellerDashboardController {
 
         Button submitBtn = new Button(editing ? "Save Changes for Review" : "Submit for Review");
         submitBtn.getStyleClass().add("btn-gold");
+        submitBtn.setMaxWidth(Region.USE_PREF_SIZE);
         var descriptionControls = new ListingDescriptionControls(descriptionService, nameField,
                 catCombo, condCombo, descArea, submitBtn);
         submitBtn.setOnAction(e -> {
@@ -1515,6 +1517,7 @@ public class SellerDashboardController {
 
         Button save = new Button("Save Changes");
         save.getStyleClass().add("btn-gold");
+        save.setMaxWidth(Region.USE_PREF_SIZE);
         save.setOnAction(e -> saveProfile(user, name, pass, confirmation, bio, meetup));
         Button cancel = new Button("Cancel");
         cancel.getStyleClass().add("btn-outline");

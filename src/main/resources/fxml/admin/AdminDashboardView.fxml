@@ -39,7 +39,7 @@
                         onAction="#showNotifications" maxWidth="Infinity" alignment="CENTER_LEFT"/>
                 <Circle fx:id="notifUnreadDot" radius="6" fill="#e53935" stroke="white" strokeWidth="1.5"
                         mouseTransparent="true" visible="false"
-                        StackPane.alignment="TOP_RIGHT" translateX="-14.0" translateY="10.0"/>
+                        StackPane.alignment="CENTER_RIGHT" translateX="-14.0"/>
             </StackPane>
             <Button fx:id="btnProfile" text="  My Profile" styleClass="sidebar-btn"
                     onAction="#showProfile" maxWidth="Infinity" alignment="CENTER_LEFT"/>
