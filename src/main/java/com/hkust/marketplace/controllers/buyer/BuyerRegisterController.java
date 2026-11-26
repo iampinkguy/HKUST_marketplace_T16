@@ -6,6 +6,11 @@ import javafx.collections.FXCollections;
 import javafx.fxml.FXML;
 import javafx.scene.control.*;
 
+/**
+ * Task 1.1 buyer registration. Username, full name, password, confirm password,
+ * and an optional residence hall are validated by
+ * {@link com.hkust.marketplace.utils.DataService#registerBuyer(String, String, String, String, String)}.
+ */
 public class BuyerRegisterController {
 
     @FXML private TextField usernameField;

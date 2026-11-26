@@ -32,6 +32,10 @@ import com.hkust.marketplace.models.UserRole;
 import com.hkust.marketplace.models.Deal;
 import com.hkust.marketplace.models.Review;
 
+/**
+ * SQLite and chat-file access for the marketplace.
+ * Listing chat is stored in {@code chat_history.json}, keyed by listing id and then by buyer username.
+ */
 public class DatabaseManager {
 
     private static final String URL = "jdbc:sqlite:data.db";
@@ -58,9 +62,15 @@ public class DatabaseManager {
     }
 
     /**
-     * Deletes every marketplace row and empties chat_history.json.
-     * Active admin accounts and the demo-seed marker are kept so the signed-in admin
-     * can continue and startup does not recreate the sample data.
+     * Deletes marketplace rows from {@code data.db} and replaces {@code chat_history.json}
+     * with an empty JSON object.
+     *
+     * <p>Every application table is emptied and autoincrement counters are reset.
+     * Active admin accounts are written back, and existing {@code demo_data_seed} markers
+     * are restored so the next launch does not recreate the sample listings.
+     * Deactivated or deleted admin accounts are not restored.
+     *
+     * @throws IllegalStateException if the database or chat file cannot be updated
      */
     public static void clearDatabase() {
         try (Connection connection = connect()) {
@@ -1605,6 +1615,14 @@ public class DatabaseManager {
         }
     }
 
+    /**
+     * Counts requests and finished deals for one seller.
+     *
+     * @param sellerUsername seller account name
+     * @return a map with {@code offers} (every request on the seller's listings) and
+     *         {@code completed} (accepted requests that have {@code completed_at} or {@code returned_at})
+     * @throws IllegalStateException if the counts cannot be read
+     */
     public static Map<String, Integer> fetchSellerActivityStats(String sellerUsername) {
         Map<String, Integer> stats = new LinkedHashMap<>();
         stats.put("offers", 0);
@@ -2491,6 +2509,12 @@ public class DatabaseManager {
         return listings;
     }
 
+    /**
+     * Lists the listing ids this buyer has saved.
+     *
+     * @param buyerUsername buyer account name
+     * @return saved listing ids; empty when the buyer has no favourites
+     */
     public static List<Integer> fetchFavouriteListingIds(String buyerUsername) {
         List<Integer> ids = new ArrayList<>();
         for (Map<String, Object> row : fetchQuery(
@@ -2500,6 +2524,14 @@ public class DatabaseManager {
         return ids;
     }
 
+    /**
+     * Saves or removes one favourite. Saving a favourite that already exists does nothing.
+     *
+     * @param buyerUsername buyer account name
+     * @param listingId listing to save or remove
+     * @param favourite {@code true} to save the listing, {@code false} to remove it
+     * @throws IllegalStateException if the favourite row cannot be updated
+     */
     public static void setFavourite(String buyerUsername, int listingId, boolean favourite) {
         String sql = favourite
                 ? "INSERT OR IGNORE INTO favourites (buyer_username, listing_id) VALUES (?, ?)"
@@ -2807,6 +2839,15 @@ public class DatabaseManager {
         return notifications;
     }
 
+    /**
+     * Marks every unread notification for one account as read.
+     * Notices that a category filter would hide are included. No error is raised when
+     * the account has no unread notices.
+     *
+     * @param username account whose notices are marked read
+     * @throws IllegalArgumentException if {@code username} is missing
+     * @throws IllegalStateException if the update cannot be saved
+     */
     public static void markAllNotificationsRead(String username) {
         if (username == null || username.isBlank()) {
             throw new IllegalArgumentException("A username is required.");
@@ -3155,6 +3196,19 @@ public class DatabaseManager {
     /** Minimum borrow window used for testing / auto-return demos (COMP3111). */
     public static final long MIN_BORROW_SECONDS = 5;
 
+    /**
+     * Creates or updates a borrow request. The requested length must be at least
+     * {@link #MIN_BORROW_SECONDS} and at most the listing's lending period.
+     * {@code proposed_days} stores the requested length rounded up to whole days.
+     *
+     * @param buyerUsername buyer making the request
+     * @param listingId lend listing
+     * @param start borrow start
+     * @param end borrow end
+     * @return the request id
+     * @throws IllegalArgumentException if the dates or the lending period are not usable
+     * @throws IllegalStateException if the request cannot be saved
+     */
     public static int createBorrowRequest(String buyerUsername, int listingId,
                                           LocalDateTime start, LocalDateTime end) {
         if (start == null || end == null) {

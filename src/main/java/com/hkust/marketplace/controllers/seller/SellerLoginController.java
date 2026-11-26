@@ -12,6 +12,10 @@ import javafx.scene.control.Label;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.TextField;
 
+/**
+ * Task 2.2 seller sign-in. Enter submits the form. Show and Hide reveal the same password.
+ * Only an active seller account is accepted.
+ */
 public class SellerLoginController {
 
     @FXML private TextField usernameField;

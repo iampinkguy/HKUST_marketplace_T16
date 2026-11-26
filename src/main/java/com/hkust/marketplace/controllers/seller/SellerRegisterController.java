@@ -8,6 +8,10 @@ import javafx.collections.FXCollections;
 import javafx.fxml.FXML;
 import javafx.scene.control.*;
 
+/**
+ * Task 2.1 seller registration. Username, full name, password, confirm password,
+ * an optional meet-up location, and an optional bio use the same password rules as buyer registration.
+ */
 public class SellerRegisterController {
 
     @FXML private TextField usernameField;

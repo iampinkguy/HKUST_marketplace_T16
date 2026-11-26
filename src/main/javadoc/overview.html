@@ -1,0 +1,12 @@
+<body>
+<p>
+    HKUST Marketplace is a JavaFX application for buying, selling, lending, and
+    giving away items on campus. Accounts, listings, deals, reviews, and notifications
+    are stored in <code>data.db</code>. Listing chat is stored in <code>chat_history.json</code>.
+</p>
+<p>
+    Passwords for new accounts must be at least 8 characters and include one uppercase
+    letter, one lowercase letter, and one digit. They are stored as BCrypt hashes with cost 12.
+    See {@link com.hkust.marketplace.utils.DataService#checkPasswordStrength(String)}.
+</p>
+</body>
