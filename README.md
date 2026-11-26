@@ -2,6 +2,16 @@
 
 A **JavaFX + Maven** desktop application for buying, selling, lending, and giving away items on campus. The Buyer, Seller, and Admin portals share a local SQLite database.
 
+## Quick start
+
+## Required Documents
+
+- [Application screenshots with sample inputs and outputs](docs/Screenshots%20of%20the%20execution.pdf)
+- [Unit testing report](docs/Unit%20test%20+%20coverage%20report.pdf)
+- [Branch coverage report](docs/Unit%20test%20+%20coverage%20report.pdf)
+- [JavaDoc for the implemented tasks](docs/JavaDoc_documentation/index.html)
+- [Supplementary notes and WoW factor demo (PDF)](docs/Supplementary%20Notes.pdf)
+
 ## Prerequisites
 
 1. **JDK 17 or newer.** Install a full JDK, then open a new terminal and check that both commands report version 17 or newer. [Download a JDK](https://adoptium.net/)
@@ -137,18 +147,6 @@ Launch the app and the optional JavaFX screen tests in a graphical desktop sessi
 
 Look for the first relevant `Caused by` line in the Maven output.
 
-## For the TA — Grading Guide
-
-### Follow a sale across all three portals
-
-Start from a fresh checkout for the seeded **Mini Fridge** example. Sign out between roles. Restarting from the same folder preserves your progress.
-
-1. **Admin (`admin`).** Open **Listing Review**, select Diana’s **Mini Fridge**, and approve it. The listing is published and Diana receives an approval notification.
-2. **Buyer (`alice`).** Find **Mini Fridge** in **Browse Marketplace**. Open it, choose **Make Offer**, and submit a price such as HK$350.
-3. **Seller (`diana`).** Open **Mini Fridge** in **My Listings**. Under **Incoming offers & requests**, check Alice’s price and select **Accept**. Reopen the listing and choose **Mark Complete**. The sale stays open until Alice also confirms.
-4. **Buyer (`alice`).** Open **My Deals** and choose **Mark complete** for the fridge. The app confirms completion and prompts Alice to rate the seller.
-
-To check the other listing types, use **Graphing Calculator TI-84** for a borrow request and **IKEA Desk Lamp** for a giveaway claim.
 
 ### Run the automated tests
 
