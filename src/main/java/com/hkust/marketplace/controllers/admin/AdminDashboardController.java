@@ -3,6 +3,7 @@ package com.hkust.marketplace.controllers.admin;
 import com.hkust.marketplace.controllers.ListingDescriptionControls;
 import com.hkust.marketplace.models.*;
 import com.hkust.marketplace.utils.DataService;
+import com.hkust.marketplace.utils.DatabaseManager;
 import com.hkust.marketplace.utils.DialogStyle;
 import com.hkust.marketplace.utils.ListingDescriptionService;
 import com.hkust.marketplace.utils.PhotoViewer;
@@ -1514,9 +1515,40 @@ public class AdminDashboardController {
                 error.setManaged(true);
             }
         });
+        Button clearDatabase = new Button("Clear Database");
+        clearDatabase.setId("profile-clear-database");
+        clearDatabase.getStyleClass().add("btn-danger");
+        clearDatabase.setOnAction(event -> confirmClearDatabase());
+        Label clearHint = new Label("Deletes every listing, deal, review, notification, other account, and chat_history.json. Your admin login is kept.");
+        clearHint.setWrapText(true);
+        clearHint.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 12px;");
         form.getChildren().addAll(new Label("Username"), username, new Label("Full Name"), name,
-                new Label("New Password"), pass, rules, new Label("Confirm Password"), confirm, error, success, save);
+                new Label("New Password"), pass, rules, new Label("Confirm Password"), confirm, error, success, save,
+                clearDatabase, clearHint);
         contentPane.getChildren().add(form);
+    }
+
+    private void confirmClearDatabase() {
+        Alert confirmation = new Alert(Alert.AlertType.CONFIRMATION);
+        confirmation.setTitle("Clear Database");
+        confirmation.setHeaderText("Clear all marketplace data?");
+        confirmation.setContentText("This removes users, listings, deals, reviews, notifications, and chat_history.json. Your admin account is kept. This cannot be undone.");
+        if (DialogStyle.showAndWait(confirmation).orElse(ButtonType.CANCEL) != ButtonType.OK) return;
+        try {
+            DatabaseManager.clearDatabase();
+            refreshNotificationDot();
+            Alert success = new Alert(Alert.AlertType.INFORMATION,
+                    "The database and chat history were cleared.");
+            success.setTitle("Database Cleared");
+            success.setHeaderText(null);
+            DialogStyle.showAndWait(success);
+            showProfile();
+        } catch (IllegalStateException ex) {
+            Alert error = new Alert(Alert.AlertType.ERROR, DialogStyle.userFacing(ex, "Could not clear the database."));
+            error.setTitle("Database Not Cleared");
+            error.setHeaderText(null);
+            DialogStyle.showAndWait(error);
+        }
     }
 
     @FXML
