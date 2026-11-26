@@ -24,6 +24,9 @@ import java.util.Map;
 
 import org.mindrot.jbcrypt.BCrypt;
 
+/**
+ * Role checks and marketplace operations used by the buyer, seller, and admin screens.
+ */
 public class DataService {
 
     public static final List<String> HKUST_LOCATIONS = List.of(
@@ -305,6 +308,14 @@ public class DataService {
         return DatabaseManager.listingHasOpenOffers(seller, parseListingId(listingId));
     }
 
+    /**
+     * Offer and completed-deal counts for the signed-in seller.
+     * The keys are {@code offers} and {@code completed}. View totals are calculated
+     * by the seller stats screen from each listing's view count.
+     *
+     * @return counts for the signed-in seller
+     * @throws SecurityException if the current user is not an active seller
+     */
     public static Map<String, Integer> getSellerActivityStats() {
         return DatabaseManager.fetchSellerActivityStats(requireSeller());
     }
@@ -1050,10 +1061,24 @@ public class DataService {
         DatabaseManager.reportListing(buyer, parseListingId(listingId));
     }
 
+    /**
+     * Listing ids saved by the signed-in buyer.
+     *
+     * @return saved listing ids
+     * @throws SecurityException if the current user is not an active buyer
+     */
     public static List<Integer> getBuyerFavouriteIds() {
         return DatabaseManager.fetchFavouriteListingIds(requireBuyer());
     }
 
+    /**
+     * Saves or removes a favourite for the signed-in buyer.
+     *
+     * @param listingId listing id
+     * @param favourite {@code true} to save the listing, {@code false} to remove it
+     * @throws IllegalArgumentException if the listing id is not valid or the listing does not exist
+     * @throws SecurityException if the current user is not an active buyer
+     */
     public static void setBuyerFavourite(String listingId, boolean favourite) {
         String buyer = requireBuyer();
         int id = parseListingId(listingId);
@@ -1063,6 +1088,12 @@ public class DataService {
         DatabaseManager.setFavourite(buyer, id, favourite);
     }
 
+    /**
+     * Favourite listings for the signed-in buyer. Listings the buyer has reported are omitted.
+     *
+     * @return saved listings that are still visible to this buyer
+     * @throws SecurityException if the current user is not an active buyer
+     */
     public static List<Listing> getBuyerFavouriteListings() {
         String buyer = requireBuyer();
         List<Integer> hidden = DatabaseManager.fetchReportedListingIds(buyer);
@@ -1073,6 +1104,17 @@ public class DataService {
         return favourites;
     }
 
+    /**
+     * Submits a borrow request from calendar dates. Each date is combined with the current
+     * time of day, then checked by {@link #submitBorrowRequest}.
+     *
+     * @param listingId lend listing
+     * @param start first day
+     * @param end last day
+     * @return the request id
+     * @throws IllegalArgumentException if a date is missing or the resulting period is rejected
+     * @throws SecurityException if the current user is not an active buyer
+     */
     public static int submitBorrowRequestForDates(String listingId, LocalDate start, LocalDate end) {
         if (start == null || end == null) {
             throw new IllegalArgumentException("Choose a borrow start and end date.");
@@ -1081,6 +1123,18 @@ public class DataService {
         return submitBorrowRequest(listingId, start.atTime(submissionTime), end.atTime(submissionTime));
     }
 
+    /**
+     * Submits a borrow request for an exact start and end time. The length must be at least
+     * {@link DatabaseManager#MIN_BORROW_SECONDS} and at most the seller's lending period.
+     *
+     * @param listingId lend listing
+     * @param start borrow start
+     * @param end borrow end
+     * @return the request id
+     * @throws IllegalArgumentException if the listing is not a lend listing, the buyer owns it,
+     *         or the requested length is outside the allowed range
+     * @throws SecurityException if the current user is not an active buyer
+     */
     public static int submitBorrowRequest(String listingId, LocalDateTime start, LocalDateTime end) {
         String buyer = requireBuyer();
         int id = parseListingId(listingId);
@@ -1195,12 +1249,27 @@ public class DataService {
         DatabaseManager.createBuyerReview(requireBuyer(), requestId, rating, reviewText);
     }
 
+    /**
+     * Reviews written about one seller, for the Check Seller dialog.
+     *
+     * @param sellerUsername seller account name
+     * @return review rows, or an empty list when the username is blank
+     * @throws SecurityException if the current user is not an active buyer
+     */
     public static List<Map<String, Object>> getSellerReviews(String sellerUsername) {
         requireBuyer();
         if (sellerUsername == null || sellerUsername.isBlank()) return List.of();
         return DatabaseManager.fetchSellerReviews(sellerUsername);
     }
 
+    /**
+     * Seller profile row used by Check Seller, including {@code full_name}, {@code bio},
+     * {@code average_rating}, and {@code rating_count}.
+     *
+     * @param sellerUsername seller account name
+     * @return the user row, or a fallback map with a zero rating when the account is missing
+     * @throws SecurityException if the current user is not an active buyer
+     */
     public static Map<String, Object> getSellerRating(String sellerUsername) {
         requireBuyer();
         Map<String, Object> seller = DatabaseManager.fetchRow("users", "username", sellerUsername);
@@ -1229,7 +1298,13 @@ public class DataService {
         DatabaseManager.markNotificationRead(requireAuthenticatedUser(), notificationId);
     }
 
-    /** Marks every notification for the signed-in buyer, seller, or admin as read. */
+    /**
+     * Marks every notification for the signed-in buyer, seller, or admin as read.
+     * Notices hidden by the on-screen category filter are included.
+     *
+     * @throws SecurityException if nobody is signed in
+     * @throws IllegalStateException if the update cannot be saved
+     */
     public static void markAllCurrentUserNotificationsRead() {
         DatabaseManager.markAllNotificationsRead(requireAuthenticatedUser());
     }

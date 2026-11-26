@@ -47,6 +47,11 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * Task 1 buyer portal: registration and login are separate screens.
+ * Browse, listing detail, offers, deals, profile, notifications, deal history,
+ * favourites, and seller ratings are in this dashboard.
+ */
 public class BuyerDashboardController {
 
     private enum Page { BROWSE, DETAIL, DEALS, HISTORY, FAVOURITES, NOTIFICATIONS, PROFILE, CLOSED }
@@ -518,6 +523,12 @@ public class BuyerDashboardController {
         watchListing(listing.getId(), mode, notice, actionButtons);
     }
 
+    /**
+     * Opens the seller profile dialog for the listing's seller.
+     * The window title is {@code Seller Profile - } followed by the seller's full name.
+     *
+     * @param listing listing whose seller is shown; the dialog stays available when the listing is unavailable
+     */
     private void showSellerProfile(Listing listing) {
         Map<String, Object> seller;
         List<Map<String, Object>> sellerReviews;

@@ -7,11 +7,8 @@ import javafx.application.Application;
 import javafx.stage.Stage;
 
 /**
- * HKUST Marketplace - Main Application Entry Point
- * JavaFX demo / skeleton for student development.
- *
- * This application provides a complete UI skeleton for the Buyer, Seller and Admin portals.
- * Admin login uses SQLite. Other backend integration points remain in the UI skeleton.
+ * Starts the HKUST Marketplace. The database is created, demo data is loaded once,
+ * and the welcome screen offers the buyer, seller, and admin portals.
  */
 public class MarketplaceApp extends Application {
 

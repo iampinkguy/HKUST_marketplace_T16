@@ -42,6 +42,11 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
+/**
+ * Task 2 seller portal: registration and login are separate screens.
+ * New listings, My Listings, incoming offers, profile, notifications, stats,
+ * and review replies are in this dashboard.
+ */
 public class SellerDashboardController {
 
     @FXML private StackPane contentPane;
@@ -1051,6 +1056,11 @@ public class SellerDashboardController {
         control.setStyle("-fx-border-color: #c62828; -fx-border-width: 1.5;");
     }
 
+    /**
+     * Shows total views, listings by category, and listing status for the signed-in seller.
+     * Views are the sum of {@link com.hkust.marketplace.models.Listing#getViewCount()}
+     * across that seller's listings.
+     */
     @FXML
     private void showStats() {
         setActive(btnStats, "Seller Stats");

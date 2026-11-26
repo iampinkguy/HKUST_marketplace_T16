@@ -12,6 +12,10 @@ import javafx.scene.control.Label;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.TextField;
 
+/**
+ * Task 3.1 admin sign-in. Enter submits the form. Show and Hide reveal the same password.
+ * Only the seeded admin account is accepted. There is no admin registration screen.
+ */
 public class AdminLoginController {
 
     @FXML private TextField usernameField;

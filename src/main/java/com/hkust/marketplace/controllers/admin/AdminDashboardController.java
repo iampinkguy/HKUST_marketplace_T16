@@ -31,6 +31,10 @@ import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Optional;
 
+/**
+ * Task 3 admin portal. There is no registration screen.
+ * Review, users, deals, notifications, all listings, ratings, and profile are in this dashboard.
+ */
 public class AdminDashboardController {
 
     @FXML private StackPane contentPane;
@@ -1528,6 +1532,10 @@ public class AdminDashboardController {
         contentPane.getChildren().add(form);
     }
 
+    /**
+     * Asks for confirmation, then clears {@code data.db} and {@code chat_history.json}.
+     * Cancel leaves both files unchanged. A failure is shown in an error dialog.
+     */
     private void confirmClearDatabase() {
         Alert confirmation = new Alert(Alert.AlertType.CONFIRMATION);
         confirmation.setTitle("Clear Database");
