@@ -1,1 +1,24 @@
-{}
+{
+  "1": {
+    "conversations": {
+      "alice": {
+        "messages": [
+          {
+            "timestamp": "2026-11-26T13:03:03.620983500",
+            "user": "alice",
+            "role": "buyer",
+            "content": "[Formal offer] Proposed price: HK$40"
+          },
+          {
+            "timestamp": "2026-11-26T13:44:03.252604400",
+            "user": "charlie",
+            "role": "seller",
+            "content": "hoba please take care of it uwu"
+          }
+        ],
+        "seen_buyer": true,
+        "seen_seller": true
+      }
+    }
+  }
+}

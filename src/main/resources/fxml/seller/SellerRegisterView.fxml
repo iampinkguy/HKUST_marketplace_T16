@@ -70,7 +70,7 @@
                        wrapText="true" managed="false" visible="false"/>
 
                 <Button text="Create Seller Account" styleClass="btn-gold" onAction="#handleRegister"
-                        prefWidth="Infinity" prefHeight="42"/>
+                        maxWidth="-Infinity" prefHeight="42"/>
 
                 <HBox alignment="CENTER" spacing="6">
                     <Label text="Already registered?" style="-fx-text-fill: #5a5a7a;"/>

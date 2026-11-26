@@ -46,7 +46,7 @@
                    wrapText="true" managed="false" visible="false"/>
 
             <Button text="Login as Admin" styleClass="btn-success" onAction="#handleLogin" defaultButton="true"
-                    prefWidth="Infinity" prefHeight="42"/>
+                    maxWidth="-Infinity" prefHeight="42"/>
 
             <Hyperlink text="← Back to Welcome" onAction="#goWelcome"/>
         </VBox>

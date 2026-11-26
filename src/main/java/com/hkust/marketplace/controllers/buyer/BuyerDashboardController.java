@@ -136,9 +136,9 @@ public class BuyerDashboardController {
         notifUnreadDot.setStrokeWidth(1.5);
         notifUnreadDot.setMouseTransparent(true);
         notifUnreadDot.setVisible(false);
-        StackPane.setAlignment(notifUnreadDot, Pos.TOP_RIGHT);
+        StackPane.setAlignment(notifUnreadDot, Pos.CENTER_RIGHT);
         notifUnreadDot.setTranslateX(-14);
-        notifUnreadDot.setTranslateY(10);
+        notifUnreadDot.setTranslateY(0);
         host.getChildren().add(notifUnreadDot);
     }
 
@@ -246,11 +246,11 @@ public class BuyerDashboardController {
             } catch (IllegalStateException | SecurityException ex) {
                 favouriteIds = Set.of();
             }
-            if (live.isEmpty()) {
+        if (live.isEmpty()) {
                 Label empty = new Label(keyword.isBlank()
                         ? "No live listings match the current filters."
                         : "No live listings match \"" + keyword + "\".");
-                empty.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 15px;");
+            empty.setStyle("-fx-text-fill: #5a5a7a; -fx-font-size: 15px;");
                 resultsBox.getChildren().add(empty);
                 return;
             }
@@ -530,6 +530,15 @@ public class BuyerDashboardController {
         chat.getStyleClass().add("btn-primary");
         chat.setOnAction(event -> showChatbox(listing, !finishedView && available));
         actions.getChildren().addAll(checkSeller, chat);
+        Map<String, Object> completable = buyerCompletableDeal(listing.getId());
+        if (completable != null) {
+            Button complete = new Button("Mark Complete");
+            complete.getStyleClass().add("btn-gold");
+            int requestId = ((Number) completable.get("request_id")).intValue();
+            String itemName = textValue(completable.get("item_name"));
+            complete.setOnAction(event -> markListingComplete(listing, mode, requestId, itemName));
+            actions.getChildren().add(complete);
+        }
         if (!available && !ownsDeal) {
             notice.setText("This listing is no longer available. Chat history is kept — open Chat to view the announcement.");
             actionButtons.forEach(button -> button.setDisable(true));
@@ -642,6 +651,42 @@ public class BuyerDashboardController {
         detailTicker.play();
     }
 
+    private Map<String, Object> buyerCompletableDeal(String listingId) {
+        try {
+            return DataService.getBuyerDeals().stream()
+                    .filter(deal -> listingId.equals(String.valueOf(deal.get("listing_id"))))
+                    .filter(deal -> "OFFER".equals(deal.get("request_type")) || "CLAIM".equals(deal.get("request_type")))
+                    .filter(deal -> "ACCEPTED".equals(deal.get("status")))
+                    .filter(deal -> deal.get("completed_at") == null && deal.get("buyer_completed_at") == null)
+                    .findFirst()
+                    .orElse(null);
+        } catch (IllegalStateException | SecurityException ex) {
+            return null;
+        }
+    }
+
+    private void markListingComplete(Listing listing, DetailMode mode, int requestId, String itemName) {
+        try {
+            boolean fullyDone = DataService.completeBuyerDeal(requestId);
+            if (fullyDone) {
+                alert(Alert.AlertType.INFORMATION, "Both sides marked complete. The deal is finished.");
+                askForRating(requestId, itemName);
+            } else {
+                alert(Alert.AlertType.INFORMATION,
+                        "Your completion is saved. Waiting for the seller to mark complete.");
+            }
+            Listing refreshed = DataService.peekBuyerListing(listing.getId());
+            if (refreshed == null) {
+                showListingDetail(listing.getId(), mode);
+            } else {
+                announcedVersion = refreshed.getReviewVersion();
+                renderListingDetail(refreshed, mode);
+            }
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+            alert(Alert.AlertType.ERROR, ex.getMessage());
+        }
+    }
+
     private boolean buyerOwnsActiveDeal(String listingId) {
         try {
             return DataService.getBuyerDeals().stream().anyMatch(deal ->
@@ -706,6 +751,7 @@ public class BuyerDashboardController {
         testHint.setStyle("-fx-text-fill: #8a5a00;");
         Button testBorrow = new Button("Request 5-second test borrow");
         testBorrow.getStyleClass().add("btn-gold");
+        testBorrow.setMaxWidth(Region.USE_PREF_SIZE);
         Runnable showLength = () -> {
             String error = borrowDateError(startDate.getValue(), endDate.getValue(), lendingDays);
             if (error != null) {
@@ -1038,7 +1084,7 @@ public class BuyerDashboardController {
                     DataService.selfReturnBorrow(requestId);
                     alert(Alert.AlertType.INFORMATION, "The item was returned. You can rate the seller from completed deals.");
                     showMyDeals();
-                } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+            } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
                     alert(Alert.AlertType.ERROR, ex.getMessage());
                     showMyDeals();
                 }
@@ -1061,7 +1107,7 @@ public class BuyerDashboardController {
                                 "Your completion is saved. Waiting for the seller to mark complete.");
                     }
                     showMyDeals();
-                } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+                    } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
                     alert(Alert.AlertType.ERROR, ex.getMessage());
                 }
             });
@@ -1105,7 +1151,7 @@ public class BuyerDashboardController {
                 return;
             }
             showChatbox(listing, allowFormalAction && "Available".equals(listing.getAvailabilityStatus()));
-        } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
+                } catch (IllegalArgumentException | IllegalStateException | SecurityException ex) {
             alert(Alert.AlertType.ERROR, ex.getMessage());
         }
     }
@@ -1652,6 +1698,7 @@ public class BuyerDashboardController {
         if (user != null && user.getResidenceHall() != null) residence.setValue(user.getResidenceHall());
         Button saveBtn = new Button("Save Changes");
         saveBtn.getStyleClass().add("btn-primary");
+        saveBtn.setMaxWidth(Region.USE_PREF_SIZE);
         saveBtn.setOnAction(event -> {
             try {
                 DataService.updateBuyerProfile(nameField.getText(), residence.getValue(),
@@ -1814,10 +1861,9 @@ public class BuyerDashboardController {
     private void equalizeActionButtons(HBox actions) {
         for (javafx.scene.Node node : actions.getChildren()) {
             if (!(node instanceof Button button)) continue;
-            button.setMaxWidth(Double.MAX_VALUE);
+            button.setMaxWidth(Region.USE_PREF_SIZE);
             button.setMinHeight(32);
             button.setPrefHeight(32);
-            HBox.setHgrow(button, Priority.ALWAYS);
         }
     }
 

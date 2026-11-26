@@ -99,9 +99,9 @@ public class AdminDashboardController {
         notifUnreadDot.setStrokeWidth(1.5);
         notifUnreadDot.setMouseTransparent(true);
         notifUnreadDot.setVisible(false);
-        StackPane.setAlignment(notifUnreadDot, Pos.TOP_RIGHT);
+        StackPane.setAlignment(notifUnreadDot, Pos.CENTER_RIGHT);
         notifUnreadDot.setTranslateX(-14);
-        notifUnreadDot.setTranslateY(10);
+        notifUnreadDot.setTranslateY(0);
         host.getChildren().add(notifUnreadDot);
     }
 
@@ -441,6 +441,7 @@ public class AdminDashboardController {
 
         Button addBtn = new Button("+ Add Listing (on behalf of seller)");
         addBtn.getStyleClass().add("btn-primary");
+        addBtn.setMaxWidth(Region.USE_PREF_SIZE);
         addBtn.setId("admin-listing-add");
         addBtn.setOnAction(e -> showManagedListingForm(null));
         root.getChildren().add(addBtn);
@@ -1510,6 +1511,7 @@ public class AdminDashboardController {
         Button save = new Button("Save");
         save.setId("profile-save");
         save.getStyleClass().add("btn-success");
+        save.setMaxWidth(Region.USE_PREF_SIZE);
         save.setOnAction(e -> {
             error.setVisible(false);
             error.setManaged(false);
@@ -1535,6 +1537,7 @@ public class AdminDashboardController {
         Button clearDatabase = new Button("Clear Database");
         clearDatabase.setId("profile-clear-database");
         clearDatabase.getStyleClass().add("btn-danger");
+        clearDatabase.setMaxWidth(Region.USE_PREF_SIZE);
         clearDatabase.setOnAction(event -> confirmClearDatabase());
         Label clearHint = new Label("Deletes every listing, deal, review, notification, other account, and chat_history.json. Your admin login is kept.");
         clearHint.setWrapText(true);
