@@ -162,8 +162,6 @@ To include the JavaFX admin screen tests, run the suite in a desktop session wit
 
 On macOS or Linux, replace `.\mvnw.cmd` with `sh mvnw`.
 
-**Verified result at `413bffd` (JDK 21, Windows).** The default run reported 117 passed, 1 failed, and 6 skipped. The six skips are the opt-in JavaFX screen test classes. The failing test in `AdminRatingsOverviewTest` expected a legacy review with no date to stay undated, but it received a timestamp.
-
 ## Licence
 
 Educational use — HKUST COMP project.
