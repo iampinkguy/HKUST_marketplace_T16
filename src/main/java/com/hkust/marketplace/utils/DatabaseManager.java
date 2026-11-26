@@ -57,6 +57,143 @@ public class DatabaseManager {
         return Path.of(System.getProperty("marketplace.chat.history.path", "chat_history.json"));
     }
 
+    /**
+     * Deletes every marketplace row and empties chat_history.json.
+     * Active admin accounts and the demo-seed marker are kept so the signed-in admin
+     * can continue and startup does not recreate the sample data.
+     */
+    public static void clearDatabase() {
+        try (Connection connection = connect()) {
+            try (Statement pragma = connection.createStatement()) {
+                pragma.execute("PRAGMA foreign_keys = OFF");
+            }
+            connection.setAutoCommit(false);
+            try {
+                List<Map<String, Object>> admins = snapshotActiveAdmins(connection);
+                List<Map<String, Object>> seeds = snapshotSeedMarkers(connection);
+                List<String> tables = new ArrayList<>();
+                try (Statement statement = connection.createStatement();
+                     ResultSet tablesResult = statement.executeQuery("""
+                             SELECT name FROM sqlite_master
+                             WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+                             """)) {
+                    while (tablesResult.next()) tables.add(tablesResult.getString(1));
+                }
+                try (Statement statement = connection.createStatement()) {
+                    for (String table : tables) {
+                        statement.executeUpdate("DELETE FROM " + quoteIdentifier(table));
+                    }
+                }
+                boolean hasSequence;
+                try (Statement statement = connection.createStatement();
+                     ResultSet sequence = statement.executeQuery("""
+                             SELECT name FROM sqlite_master
+                             WHERE type = 'table' AND name = 'sqlite_sequence'
+                             """)) {
+                    hasSequence = sequence.next();
+                }
+                if (hasSequence) {
+                    try (Statement statement = connection.createStatement()) {
+                        statement.executeUpdate("DELETE FROM sqlite_sequence");
+                    }
+                }
+                restoreActiveAdmins(connection, admins);
+                restoreSeedMarkers(connection, seeds);
+                connection.commit();
+            } catch (SQLException | RuntimeException ex) {
+                connection.rollback();
+                throw ex;
+            } finally {
+                connection.setAutoCommit(true);
+                try (Statement pragma = connection.createStatement()) {
+                    pragma.execute("PRAGMA foreign_keys = ON");
+                }
+            }
+        } catch (SQLException ex) {
+            throw new IllegalStateException("Could not clear the database", ex);
+        }
+        writeChatHistoryFile(new JsonObject());
+    }
+
+    private static boolean tableExists(Connection connection, String table) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")) {
+            statement.setString(1, table);
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next();
+            }
+        }
+    }
+
+    private static List<Map<String, Object>> snapshotActiveAdmins(Connection connection) throws SQLException {
+        List<Map<String, Object>> admins = new ArrayList<>();
+        if (!tableExists(connection, "users")) return admins;
+        try (Statement statement = connection.createStatement();
+             ResultSet result = statement.executeQuery("SELECT * FROM users WHERE role = 'ADMIN'")) {
+            while (result.next()) {
+                Map<String, Object> row = resultSetToMap(result);
+                Object deletedAt = row.get("deleted_at");
+                Object active = row.get("active");
+                boolean removed = deletedAt != null && !deletedAt.toString().isBlank();
+                boolean inactive = active instanceof Number number && number.intValue() != 1;
+                if (!removed && !inactive) admins.add(row);
+            }
+        }
+        return admins;
+    }
+
+    private static List<Map<String, Object>> snapshotSeedMarkers(Connection connection) throws SQLException {
+        List<Map<String, Object>> seeds = new ArrayList<>();
+        if (!tableExists(connection, "demo_data_seed")) return seeds;
+        try (Statement statement = connection.createStatement();
+             ResultSet result = statement.executeQuery("SELECT dataset_key, seeded_at FROM demo_data_seed")) {
+            while (result.next()) seeds.add(resultSetToMap(result));
+        }
+        return seeds;
+    }
+
+    private static void restoreActiveAdmins(Connection connection, List<Map<String, Object>> admins) throws SQLException {
+        if (!tableExists(connection, "users")) return;
+        String sql = """
+                INSERT INTO users (username, full_name, password_hash, role, residence_hall, bio,
+                    preferred_meetup, active, created_at)
+                VALUES (?, ?, ?, 'ADMIN', ?, ?, ?, 1, ?)
+                """;
+        for (Map<String, Object> admin : admins) {
+            try (PreparedStatement insert = connection.prepareStatement(sql)) {
+                insert.setString(1, String.valueOf(admin.get("username")));
+                insert.setString(2, String.valueOf(admin.get("full_name")));
+                insert.setString(3, String.valueOf(admin.get("password_hash")));
+                insert.setString(4, admin.get("residence_hall") == null ? null : admin.get("residence_hall").toString());
+                insert.setString(5, admin.get("bio") == null ? null : admin.get("bio").toString());
+                insert.setString(6, admin.get("preferred_meetup") == null ? null : admin.get("preferred_meetup").toString());
+                Object createdAt = admin.get("created_at");
+                insert.setString(7, createdAt == null || createdAt.toString().isBlank()
+                        ? LocalDateTime.now().toString() : createdAt.toString());
+                insert.executeUpdate();
+            }
+        }
+    }
+
+    private static void restoreSeedMarkers(Connection connection, List<Map<String, Object>> seeds) throws SQLException {
+        if (!tableExists(connection, "demo_data_seed")) return;
+        String sql = "INSERT INTO demo_data_seed (dataset_key, seeded_at) VALUES (?, ?)";
+        for (Map<String, Object> seed : seeds) {
+            try (PreparedStatement insert = connection.prepareStatement(sql)) {
+                insert.setString(1, String.valueOf(seed.get("dataset_key")));
+                insert.setString(2, String.valueOf(seed.get("seeded_at")));
+                insert.executeUpdate();
+            }
+        }
+    }
+
+    private static String quoteIdentifier(String name) {
+        if (name == null || !name.matches("[A-Za-z_][A-Za-z0-9_]*")) {
+            throw new IllegalStateException("Unexpected database table name.");
+        }
+        return "\"" + name + "\"";
+    }
+
     private static void runSql(String sql) {
         try (Connection connection = connect(); Statement statement = connection.createStatement()) {
             statement.executeUpdate(sql);
