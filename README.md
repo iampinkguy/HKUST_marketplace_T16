@@ -5,8 +5,8 @@ A **JavaFX + Maven** desktop application for buying, selling, lending, and givin
 ## Required Documents
 
 - [Application screenshots with sample inputs and outputs](docs/Screenshots%20of%20the%20execution.pdf)
-- [Branch coverage report (PDF)](docs/Coverage%20report.pdf)
-- [Unit testing report](target/surefire-reports/) — generated locally by `mvn test`; the repository does not include a separate PDF unit-test report
+- [Branch coverage report](docs/Coverage%20report.pdf)
+- [Unit testing report](target/surefire-reports/)
 - [JavaDoc for the implemented tasks](docs/JavaDoc_documentation/index.html) — GitHub displays HTML files as source; download or clone the repository and open this file locally in a browser
 - [Supplementary notes and WoW factor demo (PDF)](docs/Supplementary%20Notes.pdf)
 
