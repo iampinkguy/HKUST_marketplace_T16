@@ -2,8 +2,6 @@
 
 A **JavaFX + Maven** desktop application for buying, selling, lending, and giving away items on campus. The Buyer, Seller, and Admin portals share a local SQLite database.
 
-## Quick start
-
 ## Required Documents
 
 - [Application screenshots with sample inputs and outputs](docs/Screenshots%20of%20the%20execution.pdf)
